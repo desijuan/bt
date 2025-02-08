@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const Parser = @import("parser.zig");
+const TorrentFile = @import("torrent_file.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -16,7 +17,7 @@ pub fn main() !void {
 
     var parser = Parser.init(buffer);
 
-    var torrentFile = Parser.TorrentFile{
+    var torrentFile = TorrentFile{
         .announce = &.{},
         .comment = &.{},
         .created_by = &.{},
@@ -28,7 +29,7 @@ pub fn main() !void {
         .piece_length = 0,
     };
 
-    try parser.parseDict(&torrentFile);
+    try parser.parseDict(TorrentFile, &torrentFile);
 
     try torrentFile.print();
 }
