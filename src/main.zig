@@ -1,7 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const Parser = @import("parser.zig");
-const TorrentFile = @import("torrent_file.zig");
+const tf = @import("torrent_file.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -15,21 +15,35 @@ pub fn main() !void {
     );
     defer allocator.free(buffer);
 
-    var parser = Parser.init(buffer);
+    var torrentFileParser = Parser.init(buffer);
 
-    var torrentFile = TorrentFile{
+    var torrentFile = tf.TorrentFile{
+        .creation_date = 0,
         .announce = &.{},
         .comment = &.{},
         .created_by = &.{},
-        .name = &.{},
-        .pieces = &.{},
+        .info = &.{},
         .url_list = &.{},
-        .creation_date = 0,
-        .length = 0,
-        .piece_length = 0,
     };
 
-    try parser.parseDict(TorrentFile, &torrentFile);
+    try torrentFileParser.parseDict(tf.TorrentFile, &torrentFile);
 
+    std.debug.print("\n Torrent File:\n", .{});
     try torrentFile.print();
+
+    var torrentInfo = tf.TorrentInfo{
+        .length = 0,
+        .piece_length = 0,
+        .name = &.{},
+        .pieces = &.{},
+    };
+
+    var torrentInfoParser = Parser.init(torrentFile.info);
+
+    try torrentInfoParser.parseDict(tf.TorrentInfo, &torrentInfo);
+
+    std.debug.print("\n Torrent Info:\n", .{});
+    torrentInfo.print();
+
+    std.debug.print("\n", .{});
 }

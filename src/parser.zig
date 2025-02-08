@@ -51,20 +51,50 @@ pub fn parseStr(self: *Self) ![]const u8 {
     return self.buf[k..self.i];
 }
 
-pub fn parseList(self: *Self) ![]const u8 {
-    if (self.readChar() != 'l') return error.InvalidChar;
-
+pub fn parseListAsStr(self: *Self) ![]const u8 {
     const j: usize = self.i;
 
-    while (self.i < self.buf.len and self.peekChar() != 'e') {
-        _ = try self.parseStr();
-    }
+    if (self.readChar() != 'l') return error.InvalidChar;
 
-    const list: []const u8 = self.buf[j..self.i];
+    var next_char: u8 = self.peekChar();
+    while (self.i < self.buf.len and next_char != 'e') : (next_char = self.peekChar())
+        switch (next_char) {
+            'i' => _ = try self.parseInt(),
+
+            '1', '2', '3', '4', '5', '6', '7', '8', '9' => _ = try self.parseStr(),
+
+            'l' => _ = try self.parseListAsStr(),
+
+            else => unreachable,
+        };
 
     if (self.readChar() != 'e') return error.InvalidChar;
 
-    return list;
+    return self.buf[j..self.i];
+}
+
+pub fn parseDictAsStr(self: *Self) ![]const u8 {
+    const j: usize = self.i;
+
+    if (self.readChar() != 'd') return error.InvalidChar;
+
+    var next_char: u8 = self.peekChar();
+    while (self.i < self.buf.len and next_char != 'e') : (next_char = self.peekChar())
+        switch (next_char) {
+            'i' => _ = try self.parseInt(),
+
+            '1', '2', '3', '4', '5', '6', '7', '8', '9' => _ = try self.parseStr(),
+
+            'l' => _ = try self.parseListAsStr(),
+
+            'd' => _ = try self.parseDictAsStr(),
+
+            else => unreachable,
+        };
+
+    if (self.readChar() != 'e') return error.InvalidChar;
+
+    return self.buf[j..self.i];
 }
 
 pub fn parseDict(self: *Self, comptime T: type, dto: *T) !void {
@@ -75,18 +105,29 @@ pub fn parseDict(self: *Self, comptime T: type, dto: *T) !void {
 
         blk: inline for (T.key_names, T.field_names, T.data_types) |name, field, data_type|
             if (std.mem.eql(u8, name, key)) {
-                switch (data_type) {
-                    .int => @field(dto, field) = try self.parseInt(),
-                    .string => @field(dto, field) = try self.parseStr(),
-                    .list => @field(dto, field) = try self.parseList(),
-                    .dict => try self.parseDict(T, dto),
-                }
+                @field(dto, field) = switch (data_type) {
+                    .int => try self.parseInt(),
+                    .string => try self.parseStr(),
+                    .list => try self.parseListAsStr(),
+                    .dict => try self.parseDictAsStr(),
+                };
 
                 break :blk;
             };
     }
 
     if (self.readChar() != 'e') return error.InvalidChar;
+}
+
+pub fn printList(buffer: []const u8) !void {
+    var parser: Self = init(buffer);
+
+    if (parser.readChar() != 'l') return error.InvalidChar;
+
+    while (parser.i < parser.buf.len and parser.peekChar() != 'e')
+        std.debug.print("  '{s}'\n", .{try parser.parseStr()});
+
+    if (parser.readChar() != 'e') return error.InvalidChar;
 }
 
 inline fn peekChar(self: Self) u8 {
