@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const ParseError = std.fmt.ParseIntError;
+
 pub const DataType = enum(u2) {
     int,
     string,
@@ -19,8 +21,8 @@ pub fn init(buffer: []const u8) Self {
     };
 }
 
-pub fn parseInt(self: *Self) !u32 {
-    if (self.readChar() != 'i') return error.InvalidChar;
+pub fn parseInt(self: *Self) ParseError!u32 {
+    if (self.readChar() != 'i') return error.InvalidCharacter;
 
     const j: usize = self.i;
 
@@ -29,12 +31,12 @@ pub fn parseInt(self: *Self) !u32 {
 
     const n: u32 = try std.fmt.parseInt(u32, self.buf[j..self.i], 10);
 
-    if (self.readChar() != 'e') return error.InvalidChar;
+    if (self.readChar() != 'e') return error.InvalidCharacter;
 
     return n;
 }
 
-pub fn parseStr(self: *Self) ![]const u8 {
+pub fn parseStr(self: *Self) ParseError![]const u8 {
     const j: usize = self.i;
 
     while (self.i < self.buf.len and self.peekChar() != ':')
@@ -42,7 +44,7 @@ pub fn parseStr(self: *Self) ![]const u8 {
 
     const n: u32 = try std.fmt.parseInt(u32, self.buf[j..self.i], 10);
 
-    if (self.readChar() != ':') return error.InvalidChar;
+    if (self.readChar() != ':') return error.InvalidCharacter;
 
     const k: usize = self.i;
 
@@ -51,32 +53,10 @@ pub fn parseStr(self: *Self) ![]const u8 {
     return self.buf[k..self.i];
 }
 
-pub fn parseListAsStr(self: *Self) ![]const u8 {
+pub fn parseListAsStr(self: *Self) ParseError![]const u8 {
     const j: usize = self.i;
 
-    if (self.readChar() != 'l') return error.InvalidChar;
-
-    var next_char: u8 = self.peekChar();
-    while (self.i < self.buf.len and next_char != 'e') : (next_char = self.peekChar())
-        switch (next_char) {
-            'i' => _ = try self.parseInt(),
-
-            '1', '2', '3', '4', '5', '6', '7', '8', '9' => _ = try self.parseStr(),
-
-            'l' => _ = try self.parseListAsStr(),
-
-            else => unreachable,
-        };
-
-    if (self.readChar() != 'e') return error.InvalidChar;
-
-    return self.buf[j..self.i];
-}
-
-pub fn parseDictAsStr(self: *Self) ![]const u8 {
-    const j: usize = self.i;
-
-    if (self.readChar() != 'd') return error.InvalidChar;
+    if (self.readChar() != 'l') return error.InvalidCharacter;
 
     var next_char: u8 = self.peekChar();
     while (self.i < self.buf.len and next_char != 'e') : (next_char = self.peekChar())
@@ -92,13 +72,37 @@ pub fn parseDictAsStr(self: *Self) ![]const u8 {
             else => unreachable,
         };
 
-    if (self.readChar() != 'e') return error.InvalidChar;
+    if (self.readChar() != 'e') return error.InvalidCharacter;
 
     return self.buf[j..self.i];
 }
 
-pub fn parseDict(self: *Self, comptime T: type, dto: *T) !void {
-    if (self.readChar() != 'd') return error.InvalidChar;
+pub fn parseDictAsStr(self: *Self) ParseError![]const u8 {
+    const j: usize = self.i;
+
+    if (self.readChar() != 'd') return error.InvalidCharacter;
+
+    var next_char: u8 = self.peekChar();
+    while (self.i < self.buf.len and next_char != 'e') : (next_char = self.peekChar())
+        switch (next_char) {
+            'i' => _ = try self.parseInt(),
+
+            '1', '2', '3', '4', '5', '6', '7', '8', '9' => _ = try self.parseStr(),
+
+            'l' => _ = try self.parseListAsStr(),
+
+            'd' => _ = try self.parseDictAsStr(),
+
+            else => unreachable,
+        };
+
+    if (self.readChar() != 'e') return error.InvalidCharacter;
+
+    return self.buf[j..self.i];
+}
+
+pub fn parseDict(self: *Self, comptime T: type, dto: *T) ParseError!void {
+    if (self.readChar() != 'd') return error.InvalidCharacter;
 
     while (self.i < self.buf.len and self.peekChar() != 'e') {
         const key = try self.parseStr();
@@ -116,18 +120,18 @@ pub fn parseDict(self: *Self, comptime T: type, dto: *T) !void {
             };
     }
 
-    if (self.readChar() != 'e') return error.InvalidChar;
+    if (self.readChar() != 'e') return error.InvalidCharacter;
 }
 
-pub fn printList(buffer: []const u8) !void {
+pub fn printList(buffer: []const u8) ParseError!void {
     var parser: Self = init(buffer);
 
-    if (parser.readChar() != 'l') return error.InvalidChar;
+    if (parser.readChar() != 'l') return error.InvalidCharacter;
 
     while (parser.i < parser.buf.len and parser.peekChar() != 'e')
         std.debug.print("  '{s}'\n", .{try parser.parseStr()});
 
-    if (parser.readChar() != 'e') return error.InvalidChar;
+    if (parser.readChar() != 'e') return error.InvalidCharacter;
 }
 
 inline fn peekChar(self: Self) u8 {
