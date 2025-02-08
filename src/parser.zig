@@ -1,28 +1,49 @@
 const std = @import("std");
 
-const DataType = enum {
+const DataType = enum(u2) {
     int,
     string,
     list,
     dict,
 };
 
-const names = [6][]const u8{
+const key_names = [10][]const u8{
     "announce",
     "comment",
+    "created by",
+    "creation date",
     "info",
     "length",
     "name",
+    "piece length",
     "pieces",
+    "url-list",
 };
 
-const types = [6]DataType{
+const field_names = [10][]const u8{
+    "announce",
+    "comment",
+    "created_by",
+    "creation_date",
+    "",
+    "length",
+    "name",
+    "piece_length",
+    "pieces",
+    "url_list",
+};
+
+const data_types = [10]DataType{
     .string,
     .string,
+    .string,
+    .int,
     .dict,
     .int,
     .string,
+    .int,
     .string,
+    .list,
 };
 
 pub const TorrentFile = struct {
@@ -53,34 +74,16 @@ pub const TorrentFile = struct {
     }
 };
 
+const Self = @This();
+
 buf: []const u8,
 i: usize,
-
-const Self = @This();
 
 pub fn init(buffer: []const u8) Self {
     return Self{
         .buf = buffer,
         .i = 0,
     };
-}
-
-pub fn parseTorrentFile(self: *Self) !TorrentFile {
-    var torrentFile = TorrentFile{
-        .announce = &.{},
-        .comment = &.{},
-        .created_by = &.{},
-        .name = &.{},
-        .pieces = &.{},
-        .url_list = &.{},
-        .creation_date = 0,
-        .length = 0,
-        .piece_length = 0,
-    };
-
-    try self.parseDict(&torrentFile);
-
-    return torrentFile;
 }
 
 inline fn peekChar(self: Self) u8 {
@@ -141,38 +144,18 @@ fn parseList(self: *Self) ![]const u8 {
     return list;
 }
 
-fn parseDict(self: *Self, torrentFile: *TorrentFile) !void {
+pub fn parseDict(self: *Self, torrentFile: *TorrentFile) !void {
     if (self.readChar() != 'd') return error.InvalidChar;
 
     while (self.i < self.buf.len and self.peekChar() != 'e') {
         const key = try self.parseStr();
 
-        if (std.mem.eql(u8, "created by", key)) {
-            torrentFile.created_by = try self.parseStr();
-            continue;
-        }
-
-        if (std.mem.eql(u8, "creation date", key)) {
-            torrentFile.creation_date = try self.parseInt();
-            continue;
-        }
-
-        if (std.mem.eql(u8, "url-list", key)) {
-            torrentFile.url_list = try self.parseList();
-            continue;
-        }
-
-        if (std.mem.eql(u8, "piece length", key)) {
-            torrentFile.piece_length = try self.parseInt();
-            continue;
-        }
-
-        blk: inline for (names, types) |name, dataType|
+        blk: inline for (key_names, field_names, data_types) |name, field, data_type|
             if (std.mem.eql(u8, name, key)) {
-                switch (dataType) {
-                    .int => @field(torrentFile, name) = try self.parseInt(),
-                    .string => @field(torrentFile, name) = try self.parseStr(),
-                    .list => @field(torrentFile, name) = try self.parseList(),
+                switch (data_type) {
+                    .int => @field(torrentFile, field) = try self.parseInt(),
+                    .string => @field(torrentFile, field) = try self.parseStr(),
+                    .list => @field(torrentFile, field) = try self.parseList(),
                     .dict => try self.parseDict(torrentFile),
                 }
 

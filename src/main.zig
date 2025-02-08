@@ -16,6 +16,19 @@ pub fn main() !void {
 
     var parser = Parser.init(buffer);
 
-    const torrentFile = try parser.parseTorrentFile();
+    var torrentFile = Parser.TorrentFile{
+        .announce = &.{},
+        .comment = &.{},
+        .created_by = &.{},
+        .name = &.{},
+        .pieces = &.{},
+        .url_list = &.{},
+        .creation_date = 0,
+        .length = 0,
+        .piece_length = 0,
+    };
+
+    try parser.parseDict(&torrentFile);
+
     try torrentFile.print();
 }
