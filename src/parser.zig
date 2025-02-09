@@ -129,7 +129,7 @@ pub fn printList(buffer: []const u8) ParseError!void {
     if (parser.readChar() != 'l') return error.InvalidCharacter;
 
     while (parser.i < parser.buf.len and parser.peekChar() != 'e')
-        std.debug.print("  '{s}'\n", .{try parser.parseStr()});
+        std.debug.print("\n  '{s}'", .{try parser.parseStr()});
 
     if (parser.readChar() != 'e') return error.InvalidCharacter;
 }
