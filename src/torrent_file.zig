@@ -34,6 +34,7 @@ pub const TorrentFile = struct {
     comment: []const u8,
     created_by: []const u8,
     info: []const u8,
+    info_hash: []const u8,
     url_list: []const u8,
 
     pub fn print(self: TorrentFile) !void {

@@ -15,7 +15,7 @@ pub fn main() !void {
     );
     defer allocator.free(buffer);
 
-    var torrentFileParser = Parser.init(buffer);
+    // Parse Torrent File
 
     var torrentFile = tf.TorrentFile{
         .creation_date = 0,
@@ -23,13 +23,27 @@ pub fn main() !void {
         .comment = &.{},
         .created_by = &.{},
         .info = &.{},
+        .info_hash = &.{},
         .url_list = &.{},
     };
 
+    var torrentFileParser = Parser.init(buffer);
     try torrentFileParser.parseDict(tf.TorrentFile, &torrentFile);
+
+    var hash: [20]u8 = undefined;
+    var hash_str: [40]u8 = undefined;
+
+    std.crypto.hash.Sha1.hash(torrentFile.info, &hash, .{});
+
+    for (hash, 0..) |n, i|
+        _ = try std.fmt.bufPrint(hash_str[2 * i .. 2 * i + 2], "{x:0>2}", .{n});
+
+    torrentFile.info_hash = &hash_str;
 
     std.debug.print("\n Torrent File:\n", .{});
     try torrentFile.print();
+
+    // Parse Torrent Info
 
     var torrentInfo = tf.TorrentInfo{
         .length = 0,
@@ -39,7 +53,6 @@ pub fn main() !void {
     };
 
     var torrentInfoParser = Parser.init(torrentFile.info);
-
     try torrentInfoParser.parseDict(tf.TorrentInfo, &torrentInfo);
 
     std.debug.print("\n Torrent Info:\n", .{});
