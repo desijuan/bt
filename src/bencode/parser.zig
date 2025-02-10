@@ -63,13 +63,13 @@ pub fn parseListAsStr(self: *Self) ParseError![]const u8 {
         switch (next_char) {
             'i' => _ = try self.parseInt(),
 
-            '1', '2', '3', '4', '5', '6', '7', '8', '9' => _ = try self.parseStr(),
+            '1'...'9' => _ = try self.parseStr(),
 
             'l' => _ = try self.parseListAsStr(),
 
             'd' => _ = try self.parseDictAsStr(),
 
-            else => unreachable,
+            else => return error.InvalidCharacter,
         };
 
     if (self.readChar() != 'e') return error.InvalidCharacter;
@@ -87,13 +87,13 @@ pub fn parseDictAsStr(self: *Self) ParseError![]const u8 {
         switch (next_char) {
             'i' => _ = try self.parseInt(),
 
-            '1', '2', '3', '4', '5', '6', '7', '8', '9' => _ = try self.parseStr(),
+            '1'...'9' => _ = try self.parseStr(),
 
             'l' => _ = try self.parseListAsStr(),
 
             'd' => _ = try self.parseDictAsStr(),
 
-            else => unreachable,
+            else => return error.InvalidCharacter,
         };
 
     if (self.readChar() != 'e') return error.InvalidCharacter;

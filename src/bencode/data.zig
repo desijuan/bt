@@ -36,16 +36,20 @@ pub const TorrentFile = struct {
     comment: []const u8,
     created_by: []const u8,
     info: []const u8,
-    info_hash: []const u8,
+    info_hash: *[20]u8,
     url_list: []const u8,
 
     pub fn print(self: TorrentFile) !void {
         inline for (@typeInfo(TorrentFile).Struct.fields) |field| switch (@typeInfo(field.type)) {
             .Pointer => if (comptime std.mem.eql(u8, "info", field.name))
-                std.debug.print("{s}: {s} [..]\n", .{ field.name, @field(self, field.name)[0..90] })
-            else if (comptime std.mem.eql(u8, "url_list", field.name)) {
+                std.debug.print("{s}: {s} [..]\n", .{ field.name, self.info[0..90] })
+            else if (comptime std.mem.eql(u8, "info_hash", field.name)) {
+                std.debug.print("{s}: '", .{field.name});
+                for (self.info_hash.*) |c| std.debug.print("{x:0>2}", .{c});
+                std.debug.print("'\n", .{});
+            } else if (comptime std.mem.eql(u8, "url_list", field.name)) {
                 std.debug.print("{s}:", .{field.name});
-                try Parser.printList(@field(self, field.name));
+                try Parser.printList(self.url_list);
             } else std.debug.print("{s}: '{s}'\n", .{ field.name, @field(self, field.name) }),
 
             .Int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
@@ -87,7 +91,7 @@ pub const TorrentInfo = struct {
     pub fn print(self: TorrentInfo) void {
         inline for (@typeInfo(TorrentInfo).Struct.fields) |field| switch (@typeInfo(field.type)) {
             .Pointer => if (comptime std.mem.eql(u8, "pieces", field.name))
-                std.debug.print("{s}: {x} [..]\n", .{ field.name, @field(self, field.name)[0..20] })
+                std.debug.print("{s}: {x} [..]\n", .{ field.name, self.pieces[0..20] })
             else
                 std.debug.print("{s}: '{s}'\n", .{ field.name, @field(self, field.name) }),
 
