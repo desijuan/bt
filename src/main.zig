@@ -145,13 +145,15 @@ pub fn main() !void {
         const event: *Event = try eventPool.create();
         event.* = Event{ .CONNECT = fd };
 
-        // const ts = std.os.linux.kernel_timespec{
-        //     .tv_sec = 5,
-        //     .tv_nsec = 0,
-        // };
+        const ts = std.os.linux.kernel_timespec{
+            .tv_sec = 5,
+            .tv_nsec = 0,
+        };
 
-        _ = try ring.connect(@intFromPtr(event), fd, &peer.any, peer.getOsSockLen());
-        // _ = try ring.link_timeout(@intFromPtr(event), &ts, 0);
+        const sqe: *std.os.linux.io_uring_sqe = try ring.connect(@intFromPtr(event), fd, &peer.any, peer.getOsSockLen());
+        sqe.flags |= std.os.linux.IOSQE_IO_LINK;
+
+        _ = try ring.link_timeout(@intFromPtr(event), &ts, 0);
     }
 
     std.debug.print("Submitting requests and waiting...\n", .{});
@@ -171,6 +173,15 @@ pub fn main() !void {
 
                         event.* = Event{ .SEND = fd };
                         _ = try ring.send(@intFromPtr(event), fd, handshake, 0);
+
+                        n += 1;
+                    },
+
+                    -ETIME => {
+                        std.debug.print("Connection with fd {} timed out!\n", .{fd});
+
+                        event.* = Event{ .CLOSE = fd };
+                        _ = try ring.close(@intFromPtr(event), fd);
 
                         n += 1;
                     },
@@ -195,11 +206,13 @@ pub fn main() !void {
 
                 .RECV => |data| {
                     if (cqe.res < 0) {
-                        std.debug.print("Something went wrong when reading from fd {}\n", .{data.fd});
+                        std.debug.print("Something went wrong reading from fd {}\n", .{data.fd});
                     } else {
                         const n_read: usize = @intCast(cqe.res);
-                        const ans: []const u8 = data.buffer[0..n_read];
-                        std.debug.print("Received from fd {}: '{s}'\n", .{ data.fd, ans });
+                        std.debug.print(
+                            "Received {} bytes from fd {}: '{s}'\n",
+                            .{ n_read, data.fd, data.buffer[0..n_read] },
+                        );
                     }
 
                     allocator.free(data.buffer);
