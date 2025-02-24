@@ -5,13 +5,24 @@ const bencode_data = @import("bencode/data.zig");
 const http = @import("net/http.zig");
 const tcp = @import("net/tcp.zig");
 
-const IoUring = std.os.linux.IoUring;
+const posix = std.posix;
+const linux = std.os.linux;
+const IoUring = linux.IoUring;
+
 const TorrentFile = bencode_data.TorrentFile;
 const TorrentInfo = bencode_data.TorrentInfo;
 const TrackerResponse = bencode_data.TrackerResponse;
 
-const ETIME: i32 = @intFromEnum(std.os.linux.E.TIME);
 const BUFFER_LENGTH = 512;
+
+const Peer = struct {
+    ip: [4]u8,
+    port: u16,
+
+    fn address(self: Peer) std.net.Address {
+        return std.net.Address.initIp4(self.ip, self.port);
+    }
+};
 
 const RecvData = struct {
     fd: i32,
@@ -19,6 +30,7 @@ const RecvData = struct {
 };
 
 const Event = union(enum) {
+    SOCKET: Peer,
     CONNECT: i32,
     SEND: i32,
     RECV: RecvData,
@@ -27,7 +39,22 @@ const Event = union(enum) {
 
 const EventPool = std.heap.MemoryPool(Event);
 
-const n_conns = 20;
+const MsgId = enum(u8) {
+    Choke = 0,
+    Unchoke = 1,
+    Interested = 2,
+    NotInterested = 3,
+    Have = 4,
+    Bitfield = 5,
+    Request = 6,
+    Piece = 7,
+    Cancel = 8,
+};
+
+const Msg = struct {
+    id: MsgId,
+    payload: []const u8,
+};
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
@@ -37,9 +64,6 @@ pub fn main() !void {
 
     var eventPool = EventPool.init(allocator);
     defer eventPool.deinit();
-
-    var ring: IoUring = try IoUring.init(64, 0);
-    defer ring.deinit();
 
     const buffer: []const u8 = try utils.readFile(
         allocator,
@@ -122,53 +146,93 @@ pub fn main() !void {
     std.debug.print("\n", .{});
 
     if (trackerResponse.peers.len % 6 != 0) return error.MalformedPeersList;
+    // const n_conns: u16 = @as(u16, @intCast(trackerResponse.peers.len / 6));
+    const n_conns: u16 = 8;
+
+    const entries: u16 = try std.math.ceilPowerOfTwo(u16, 4 * n_conns);
+
+    var ring: IoUring = try IoUring.init(entries, 0);
+    defer ring.deinit();
 
     // Download from Peers
 
     const handshake: []const u8 = try std.fmt.allocPrint(
         allocator,
         "\x13BitTorrent protocol\x00\x00\x00\x00\x00\x00\x00\x00{s}{s}",
-        .{ torrentFile.info_hash, peer_id },
+        .{ torrentFile.info_hash, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14" },
     );
     defer allocator.free(handshake);
 
-    std.debug.print("Queing requests:\n", .{});
+    std.debug.print("Creating sockets...\n\n", .{});
 
     for (0..n_conns) |n| {
-        const peer: std.net.Address = tcp.getNthPeer(n, trackerResponse.peers);
+        const peers: []const u8 = trackerResponse.peers;
+        const i = n * 6;
 
-        const fd: i32 = try std.posix.socket(std.os.linux.AF.INET, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP);
-        errdefer std.posix.close(fd);
-
-        std.debug.print("fd {} @ {}\n", .{ fd, peer });
-
-        const event: *Event = try eventPool.create();
-        event.* = Event{ .CONNECT = fd };
-
-        const ts = std.os.linux.kernel_timespec{
-            .tv_sec = 5,
-            .tv_nsec = 0,
+        const peer = Peer{
+            .ip = peers[i .. i + 4][0..4].*,
+            .port = (@as(u16, peers[i + 4]) << 8) | @as(u16, peers[i + 5]),
         };
 
-        const sqe: *std.os.linux.io_uring_sqe = try ring.connect(@intFromPtr(event), fd, &peer.any, peer.getOsSockLen());
-        sqe.flags |= std.os.linux.IOSQE_IO_LINK;
+        const event: *Event = try eventPool.create();
+        event.* = Event{ .SOCKET = peer };
 
-        _ = try ring.link_timeout(@intFromPtr(event), &ts, 0);
+        _ = try ring.socket(
+            @intFromPtr(event),
+            linux.AF.INET,
+            posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
+            posix.IPPROTO.TCP,
+            0,
+        );
     }
 
-    std.debug.print("Submitting requests and waiting...\n", .{});
+    _ = try ring.submit_and_wait(n_conns);
 
-    var n: i8 = n_conns;
+    while (ring.cq_ready() > 0) {
+        const cqe: linux.io_uring_cqe = try ring.copy_cqe();
+        const event: *Event = @ptrFromInt(cqe.user_data);
+
+        switch (event.*) {
+            .SOCKET => |peer| switch (cqe.err()) {
+                .SUCCESS => {
+                    const fd: i32 = cqe.res;
+                    const addr: std.net.Address = peer.address();
+
+                    std.debug.print("fd {d:>2} @ {}\n", .{ @as(u16, @intCast(fd)), addr });
+
+                    event.* = Event{ .CONNECT = fd };
+
+                    _ = try ring.connect(@intFromPtr(event), fd, &addr.any, addr.getOsSockLen());
+                },
+
+                else => |err| {
+                    std.debug.print(
+                        "Creation of socket for peer {} failed with error {s}\n",
+                        .{ peer.address(), @tagName(err) },
+                    );
+                    eventPool.destroy(event);
+                },
+            },
+
+            else => return error.UnexepectedEvent,
+        }
+    }
+
+    std.debug.print("\nConnecting to peers...\n\n", .{});
+
+    var n: i32 = n_conns;
     while (n > 0) {
         _ = try ring.submit_and_wait(1);
 
         while (ring.cq_ready() > 0) : (n -= 1) {
-            const cqe: std.os.linux.io_uring_cqe = try ring.copy_cqe();
+            const cqe: linux.io_uring_cqe = try ring.copy_cqe();
             const event: *Event = @ptrFromInt(cqe.user_data);
 
             switch (event.*) {
-                .CONNECT => |fd| switch (cqe.res) {
-                    0 => {
+                .SOCKET => return error.UnexepectedEvent,
+
+                .CONNECT => |fd| switch (cqe.err()) {
+                    .SUCCESS => {
                         std.debug.print("Connected to fd {}, sending handshake...\n", .{fd});
 
                         event.* = Event{ .SEND = fd };
@@ -177,23 +241,21 @@ pub fn main() !void {
                         n += 1;
                     },
 
-                    -ETIME => {
-                        std.debug.print("Connection with fd {} timed out!\n", .{fd});
+                    else => |err| {
+                        std.debug.print(
+                            "Connection with fd {} returned error {s}\n",
+                            .{ fd, @tagName(err) },
+                        );
 
                         event.* = Event{ .CLOSE = fd };
                         _ = try ring.close(@intFromPtr(event), fd);
 
                         n += 1;
                     },
-
-                    else => {
-                        std.debug.print("There was an error with fd: {}\n", .{fd});
-                        // std.debug.print("error: {s}.\n", .{@tagName(std.posix.errno(fd))});
-                    },
                 },
 
                 .SEND => |fd| {
-                    const recv_buffer = try allocator.alloc(u8, BUFFER_LENGTH);
+                    const recv_buffer: []u8 = try allocator.alloc(u8, BUFFER_LENGTH);
 
                     event.* = Event{
                         .RECV = RecvData{ .fd = fd, .buffer = recv_buffer },
@@ -205,14 +267,19 @@ pub fn main() !void {
                 },
 
                 .RECV => |data| {
-                    if (cqe.res < 0) {
-                        std.debug.print("Something went wrong reading from fd {}\n", .{data.fd});
-                    } else {
-                        const n_read: usize = @intCast(cqe.res);
-                        std.debug.print(
-                            "Received {} bytes from fd {}: '{s}'\n",
-                            .{ n_read, data.fd, data.buffer[0..n_read] },
-                        );
+                    switch (cqe.err()) {
+                        .SUCCESS => {
+                            const n_read: usize = @intCast(cqe.res);
+                            std.debug.print(
+                                "Received {} bytes from fd {}: '{any}'\n",
+                                .{ n_read, data.fd, data.buffer[0..n_read] },
+                            );
+                        },
+
+                        else => |err| std.debug.print(
+                            "Recv from fd {} returned error {s}\n",
+                            .{ data.fd, @tagName(err) },
+                        ),
                     }
 
                     allocator.free(data.buffer);
@@ -225,10 +292,11 @@ pub fn main() !void {
 
                 .CLOSE => |fd| {
                     std.debug.print("Closed fd {}\n", .{fd});
+                    eventPool.destroy(event);
                 },
             }
         }
     }
 
-    std.debug.print("All done!\n", .{});
+    std.debug.print("\nAll done!\n", .{});
 }
