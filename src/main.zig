@@ -13,7 +13,7 @@ const TorrentFile = bencode_data.TorrentFile;
 const TorrentInfo = bencode_data.TorrentInfo;
 const TrackerResponse = bencode_data.TrackerResponse;
 
-const BUFFER_LENGTH = 512;
+const BUFFER_SIZE = 512;
 
 const Peer = struct {
     ip: [4]u8,
@@ -22,6 +22,20 @@ const Peer = struct {
     fn address(self: Peer) std.net.Address {
         return std.net.Address.initIp4(self.ip, self.port);
     }
+
+    pub fn format(
+        self: Peer,
+        comptime fmt: []const u8,
+        _: std.fmt.FormatOptions,
+        out_stream: anytype,
+    ) !void {
+        if (fmt.len != 0) std.fmt.invalidFmtError(fmt, self);
+        try std.fmt.format(
+            out_stream,
+            "{}.{}.{}.{}:{}",
+            .{ self.ip[0], self.ip[1], self.ip[2], self.ip[3], self.port },
+        );
+    }
 };
 
 const RecvData = struct {
@@ -29,12 +43,26 @@ const RecvData = struct {
     buffer: []u8,
 };
 
-const Event = union(enum) {
-    SOCKET: Peer,
-    CONNECT: i32,
-    SEND: i32,
-    RECV: RecvData,
-    CLOSE: i32,
+const Event = enum {
+    SOCKET,
+    CONNECT,
+    SEND,
+    RECV,
+    CLOSE,
+};
+
+const Ctx = struct {
+    event: Event,
+    fd: i32,
+    peer: Peer,
+    buffer: ?[]const u8,
+
+    fn freeBuffer(self: *Ctx, allocator: std.mem.Allocator) void {
+        if (self.buffer) |buffer| {
+            allocator.free(buffer);
+            self.buffer = null;
+        }
+    }
 };
 
 const EventPool = std.heap.MemoryPool(Event);
@@ -57,19 +85,16 @@ const Msg = struct {
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer _ = gpa.deinit();
+    var gpa_inst = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
+    defer _ = gpa_inst.deinit();
 
-    const allocator = gpa.allocator();
+    const gpa = gpa_inst.allocator();
 
-    var eventPool = EventPool.init(allocator);
-    defer eventPool.deinit();
-
-    const buffer: []const u8 = try utils.readFile(
-        allocator,
+    const file_buffer: []const u8 = try utils.readFile(
+        gpa,
         "debian-12.9.0-amd64-netinst.iso.torrent",
     );
-    defer allocator.free(buffer);
+    defer gpa.free(file_buffer);
 
     // Parse Torrent File
 
@@ -85,7 +110,7 @@ pub fn main() !void {
         .url_list = &.{},
     };
 
-    var torrentFileParser = Parser.init(buffer);
+    var torrentFileParser = Parser.init(file_buffer);
     try torrentFileParser.parseDict(TorrentFile, &torrentFile);
 
     std.crypto.hash.Sha1.hash(torrentFile.info, &hash, .{});
@@ -121,7 +146,7 @@ pub fn main() !void {
 
     const peer_id = "%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F%10%11%12%13%14";
 
-    const body = try http.requestPeers(allocator, .{
+    const body = try http.requestPeers(gpa, .{
         .announce = torrentFile.announce,
         .peer_id = peer_id,
         .info_hash = torrentFile.info_hash,
@@ -131,7 +156,7 @@ pub fn main() !void {
         .compact = 1,
         .left = torrentInfo.length,
     });
-    defer allocator.free(body);
+    defer gpa.free(body);
 
     var trackerResponse = TrackerResponse{
         .interval = 0,
@@ -154,14 +179,16 @@ pub fn main() !void {
     var ring: IoUring = try IoUring.init(entries, 0);
     defer ring.deinit();
 
+    var ctxs_array: [n_conns]Ctx = undefined;
+
     // Download from Peers
 
     const handshake: []const u8 = try std.fmt.allocPrint(
-        allocator,
+        gpa,
         "\x13BitTorrent protocol\x00\x00\x00\x00\x00\x00\x00\x00{s}{s}",
         .{ torrentFile.info_hash, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14" },
     );
-    defer allocator.free(handshake);
+    defer gpa.free(handshake);
 
     std.debug.print("Creating sockets...\n\n", .{});
 
@@ -174,11 +201,15 @@ pub fn main() !void {
             .port = (@as(u16, peers[i + 4]) << 8) | @as(u16, peers[i + 5]),
         };
 
-        const event: *Event = try eventPool.create();
-        event.* = Event{ .SOCKET = peer };
+        ctxs_array[n] = Ctx{
+            .event = .SOCKET,
+            .fd = -1,
+            .peer = peer,
+            .buffer = null,
+        };
 
         _ = try ring.socket(
-            @intFromPtr(event),
+            @intFromPtr(&ctxs_array[n]),
             linux.AF.INET,
             posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
             posix.IPPROTO.TCP,
@@ -190,27 +221,28 @@ pub fn main() !void {
 
     while (ring.cq_ready() > 0) {
         const cqe: linux.io_uring_cqe = try ring.copy_cqe();
-        const event: *Event = @ptrFromInt(cqe.user_data);
+        const ctx: *Ctx = @ptrFromInt(cqe.user_data);
 
-        switch (event.*) {
-            .SOCKET => |peer| switch (cqe.err()) {
+        switch (ctx.event) {
+            .SOCKET => switch (cqe.err()) {
                 .SUCCESS => {
                     const fd: i32 = cqe.res;
-                    const addr: std.net.Address = peer.address();
+                    ctx.fd = fd;
+
+                    const addr: std.net.Address = ctx.peer.address();
 
                     std.debug.print("fd {d:>2} @ {}\n", .{ @as(u16, @intCast(fd)), addr });
 
-                    event.* = Event{ .CONNECT = fd };
+                    ctx.event = .CONNECT;
 
-                    _ = try ring.connect(@intFromPtr(event), fd, &addr.any, addr.getOsSockLen());
+                    _ = try ring.connect(@intFromPtr(ctx), fd, &addr.any, addr.getOsSockLen());
                 },
 
                 else => |err| {
                     std.debug.print(
-                        "Creation of socket for peer {} failed with error {s}\n",
-                        .{ peer.address(), @tagName(err) },
+                        "Create socket for peer {} failed with error {s}\n",
+                        .{ ctx.peer, @tagName(err) },
                     );
-                    eventPool.destroy(event);
                 },
             },
 
@@ -226,73 +258,104 @@ pub fn main() !void {
 
         while (ring.cq_ready() > 0) : (n -= 1) {
             const cqe: linux.io_uring_cqe = try ring.copy_cqe();
-            const event: *Event = @ptrFromInt(cqe.user_data);
+            const ctx: *Ctx = @ptrFromInt(cqe.user_data);
 
-            switch (event.*) {
+            switch (ctx.event) {
                 .SOCKET => return error.UnexepectedEvent,
 
-                .CONNECT => |fd| switch (cqe.err()) {
+                .CONNECT => switch (cqe.err()) {
                     .SUCCESS => {
-                        std.debug.print("Connected to fd {}, sending handshake...\n", .{fd});
+                        std.debug.print("Connected to fd {} @ {}, sending handshake...\n", .{ ctx.fd, ctx.peer });
 
-                        event.* = Event{ .SEND = fd };
-                        _ = try ring.send(@intFromPtr(event), fd, handshake, 0);
+                        ctx.event = .SEND;
+                        _ = try ring.send(@intFromPtr(ctx), ctx.fd, handshake, 0);
 
                         n += 1;
                     },
 
                     else => |err| {
                         std.debug.print(
-                            "Connection with fd {} returned error {s}\n",
-                            .{ fd, @tagName(err) },
+                            "Connection with fd {} @ {} returned error {s}\n",
+                            .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
-                        event.* = Event{ .CLOSE = fd };
-                        _ = try ring.close(@intFromPtr(event), fd);
+                        ctx.event = .CLOSE;
+                        _ = try ring.close(@intFromPtr(ctx), ctx.fd);
 
                         n += 1;
                     },
                 },
 
-                .SEND => |fd| {
-                    const recv_buffer: []u8 = try allocator.alloc(u8, BUFFER_LENGTH);
+                .SEND => switch (cqe.err()) {
+                    .SUCCESS => {
+                        const buffer: []u8 = try gpa.alloc(u8, BUFFER_SIZE);
 
-                    event.* = Event{
-                        .RECV = RecvData{ .fd = fd, .buffer = recv_buffer },
-                    };
+                        ctx.event = .RECV;
+                        ctx.buffer = buffer;
 
-                    _ = try ring.recv(@intFromPtr(event), fd, .{ .buffer = recv_buffer }, 0);
+                        _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = buffer }, 0);
 
-                    n += 1;
+                        n += 1;
+                    },
+
+                    else => |err| {
+                        std.debug.print(
+                            "Send to fd {} @ {} returned error {s}\n",
+                            .{ ctx.fd, ctx.peer, @tagName(err) },
+                        );
+
+                        ctx.event = .CLOSE;
+                        _ = try ring.close(@intFromPtr(ctx), ctx.fd);
+
+                        n += 1;
+                    },
                 },
 
-                .RECV => |data| {
+                .RECV => {
                     switch (cqe.err()) {
                         .SUCCESS => {
                             const n_read: usize = @intCast(cqe.res);
+                            const ans: []const u8 = ctx.buffer.?[0..n_read];
+
                             std.debug.print(
-                                "Received {} bytes from fd {}: '{any}'\n",
-                                .{ n_read, data.fd, data.buffer[0..n_read] },
+                                "Received {} bytes from fd {} @ {}: '{any}'\n",
+                                .{ n_read, ctx.fd, ctx.peer, ans },
                             );
+
+                            std.debug.print("Valid: {}\n", .{tcp.validateAnswer(ans, torrentFile.info_hash)});
                         },
 
                         else => |err| std.debug.print(
-                            "Recv from fd {} returned error {s}\n",
-                            .{ data.fd, @tagName(err) },
+                            "Recv from fd {} @ {} returned error {s}\n",
+                            .{ ctx.fd, ctx.peer, @tagName(err) },
                         ),
                     }
 
-                    allocator.free(data.buffer);
+                    ctx.freeBuffer(gpa);
 
-                    event.* = Event{ .CLOSE = data.fd };
-                    _ = try ring.close(@intFromPtr(event), data.fd);
+                    ctx.event = .CLOSE;
+                    _ = try ring.close(@intFromPtr(ctx), ctx.fd);
 
                     n += 1;
                 },
 
-                .CLOSE => |fd| {
-                    std.debug.print("Closed fd {}\n", .{fd});
-                    eventPool.destroy(event);
+                .CLOSE => {
+                    switch (cqe.err()) {
+                        .SUCCESS => std.debug.print(
+                            "Closed fd {} @ {}\n",
+                            .{ ctx.fd, ctx.peer },
+                        ),
+
+                        else => |err| std.debug.print(
+                            "Close fd {} @ {} returned error {s}\n",
+                            .{ ctx.fd, ctx.peer, @tagName(err) },
+                        ),
+                    }
+
+                    if (ctx.buffer) |buffer| {
+                        gpa.free(buffer);
+                        ctx.buffer = null;
+                    }
                 },
             }
         }
