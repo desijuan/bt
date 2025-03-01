@@ -183,12 +183,15 @@ pub fn main() !void {
 
     // Download from Peers
 
-    const handshake: []const u8 = try std.fmt.allocPrint(
-        gpa,
-        "\x13BitTorrent protocol\x00\x00\x00\x00\x00\x00\x00\x00{s}{s}",
-        .{ torrentFile.info_hash, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14" },
-    );
+    const hs = tcp.Handshake{
+        .info_hash = torrentFile.info_hash,
+        .peer_id = &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 },
+    };
+
+    const handshake: []const u8 = try hs.serialize(gpa);
     defer gpa.free(handshake);
+
+    std.debug.print("handshake: {any}\n\n", .{handshake});
 
     std.debug.print("Creating sockets...\n\n", .{});
 
