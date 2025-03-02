@@ -63,7 +63,7 @@ pub const Handshake = struct {
     }
 
     pub fn serialize(self: Handshake, allocator: std.mem.Allocator) ![]const u8 {
-        const str_len = self.len();
+        const str_len: usize = self.len();
         const str: []u8 = try allocator.alloc(u8, str_len);
 
         str[0] = @intCast(self.pstr.len);
@@ -87,7 +87,7 @@ pub fn validateAnswer(ans: []const u8, info_hash: []const u8) bool {
         (std.mem.eql(u8, info_hash, ans[28..48]));
 }
 
-const MsgId = enum(u8) {
+pub const MsgId = enum(u8) {
     Choke = 0,
     Unchoke = 1,
     Interested = 2,
@@ -99,7 +99,45 @@ const MsgId = enum(u8) {
     Cancel = 8,
 };
 
-const Msg = struct {
+pub const Msg = struct {
     id: MsgId,
     payload: []const u8,
+
+    pub fn len(self: Msg) usize {
+        return 5 + self.payload.len;
+    }
+
+    pub fn serialize(self: Msg, allocator: std.mem.Allocator) ![]const u8 {
+        const str_len: usize = self.len();
+        const str: []u8 = try allocator.alloc(u8, str_len);
+
+        std.mem.writeInt(usize, str[0..4], str_len, .big);
+        str[4] = @intFromEnum(self.id);
+        @memcpy(str[5 .. 5 + self.payload.len], self.payload);
+
+        return str;
+    }
+
+    pub fn decode(str: []const u8) !Msg {
+        if (str.len < 5) return error.InvalidSring;
+
+        const length: u32 = (@as(u32, str[0]) << 24) |
+            (@as(u32, str[1]) << 16) | (@as(u32, str[2]) << 8) | @as(u32, str[3]);
+
+        if (str.len != 4 + length) return error.InvalidSring;
+
+        return Msg{
+            .id = @enumFromInt(str[4]),
+            .payload = str[5..],
+        };
+    }
+
+    pub fn eql(self: Msg, other: Msg) bool {
+        return self.id == other.id and std.mem.eql(u8, self.payload, other.payload);
+    }
 };
+
+test "decode" {
+    const msg: Msg = try Msg.decode(&.{ 0, 0, 0, 1, 0 });
+    try std.testing.expect(msg.eql(Msg{ .id = .Choke, .payload = &.{} }));
+}
