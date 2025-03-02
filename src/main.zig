@@ -31,14 +31,7 @@ const Ctx = struct {
     event: Event,
     fd: i32,
     peer: tcp.Peer,
-    buffer: ?[]u8,
-
-    fn freeBuffer(self: *Ctx, allocator: std.mem.Allocator) void {
-        if (self.buffer) |buffer| {
-            allocator.free(buffer);
-            self.buffer = null;
-        }
-    }
+    buffer: []u8,
 };
 
 pub fn main() !void {
@@ -148,23 +141,25 @@ pub fn main() !void {
     std.debug.print("handshake: {any}\n\n", .{handshake});
 
     var peers: tcp.PeersIterator = try tcp.PeersIterator.init(trackerResponse.peers);
+
+    const ctxs_buffers: []u8 = try gpa.alloc(u8, N_CONNS * BUFFER_SIZE);
+    defer gpa.free(ctxs_buffers);
+
     var ctxs_array: [N_CONNS]Ctx = undefined;
 
-    for (0..N_CONNS) |n| {
+    for (0..N_CONNS) |i| {
         const peer: tcp.Peer = peers.next() orelse
             return error.NoPeersLeft;
 
-        const buffer: []u8 = try gpa.alloc(u8, BUFFER_SIZE);
-
-        ctxs_array[n] = Ctx{
+        ctxs_array[i] = Ctx{
             .event = .SOCKET,
             .fd = -1,
             .peer = peer,
-            .buffer = buffer,
+            .buffer = ctxs_buffers[i .. i + BUFFER_SIZE],
         };
 
         _ = try ring.socket(
-            @intFromPtr(&ctxs_array[n]),
+            @intFromPtr(&ctxs_array[i]),
             linux.AF.INET,
             posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
             posix.IPPROTO.TCP,
@@ -203,7 +198,6 @@ pub fn main() !void {
 
                     else => |err| {
                         pending -= 1;
-                        ctx.freeBuffer(gpa);
 
                         std.debug.print(
                             "Creation of socket for peer {} failed with error {s}\n",
@@ -260,7 +254,7 @@ pub fn main() !void {
                 .SEND => switch (cqe.err()) {
                     .SUCCESS => {
                         ctx.event = .RECV;
-                        _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer.? }, 0);
+                        _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
                     },
 
                     else => |err| {
@@ -278,7 +272,7 @@ pub fn main() !void {
                     switch (cqe.err()) {
                         .SUCCESS => blk: {
                             const n_read: usize = @intCast(cqe.res);
-                            const ans: []const u8 = ctx.buffer.?[0..n_read];
+                            const ans: []const u8 = ctx.buffer[0..n_read];
 
                             std.debug.print(
                                 "Received {} bytes from fd {} @ {}: {any}\n",
@@ -294,7 +288,7 @@ pub fn main() !void {
                             const hs_len: usize = hs.len();
                             if (n_read > hs_len) {
                                 std.debug.print("There are more bytes.\n", .{});
-                                const msg_prefix = ctx.buffer.?[hs_len .. hs_len + 4][0..4];
+                                const msg_prefix = ctx.buffer[hs_len .. hs_len + 4][0..4];
                                 const msg_length: u32 = tcp.Msg.decodeLength(msg_prefix);
                                 std.debug.print("msg prefix: {any}\n", .{msg_prefix});
                                 std.debug.print("msg length: {}\n", .{msg_length});
@@ -316,7 +310,6 @@ pub fn main() !void {
                 .CLOSE => blk: {
                     const peer: tcp.Peer = peers.next() orelse {
                         pending -= 1;
-                        ctx.freeBuffer(gpa);
 
                         switch (cqe.err()) {
                             .SUCCESS => std.debug.print(
@@ -348,7 +341,6 @@ pub fn main() !void {
 
                 .CLOSE_LAST => {
                     pending -= 1;
-                    ctx.freeBuffer(gpa);
 
                     switch (cqe.err()) {
                         .SUCCESS => std.debug.print(
