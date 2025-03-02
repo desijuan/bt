@@ -121,8 +121,7 @@ pub const Msg = struct {
     pub fn decode(str: []const u8) !Msg {
         if (str.len < 5) return error.InvalidSring;
 
-        const length: u32 = (@as(u32, str[0]) << 24) |
-            (@as(u32, str[1]) << 16) | (@as(u32, str[2]) << 8) | @as(u32, str[3]);
+        const length: u32 = decodeLength(str[0..4]);
 
         if (str.len != 4 + length) return error.InvalidSring;
 
@@ -132,12 +131,28 @@ pub const Msg = struct {
         };
     }
 
+    pub fn decodeLength(str: *const [4]u8) u32 {
+        return (@as(u32, str[0]) << 24) | (@as(u32, str[1]) << 16) | (@as(u32, str[2]) << 8) | @as(u32, str[3]);
+    }
+
     pub fn eql(self: Msg, other: Msg) bool {
         return self.id == other.id and std.mem.eql(u8, self.payload, other.payload);
     }
 };
 
 test "decode" {
-    const msg: Msg = try Msg.decode(&.{ 0, 0, 0, 1, 0 });
-    try std.testing.expect(msg.eql(Msg{ .id = .Choke, .payload = &.{} }));
+    const chokeMsg: Msg = try Msg.decode(&.{ 0, 0, 0, 1, 0 });
+    try std.testing.expect(chokeMsg.eql(
+        Msg{ .id = .Choke, .payload = &.{} },
+    ));
+
+    const haveMsg: Msg = try Msg.decode(&.{ 0, 0, 0, 5, 4, 0, 0, 0, 1 });
+    try std.testing.expect(haveMsg.eql(
+        Msg{ .id = .Have, .payload = &.{ 0, 0, 0, 1 } },
+    ));
+}
+
+test "decodeMsgLength" {
+    try std.testing.expectEqual(1, Msg.decodeLength(&.{ 0, 0, 0, 1 }));
+    try std.testing.expectEqual(317, Msg.decodeLength(&.{ 0, 0, 1, 61 }));
 }

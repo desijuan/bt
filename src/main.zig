@@ -291,10 +291,16 @@ pub fn main() !void {
 
                             if (!isAnsPositive) break :blk;
 
-                            if (n_read > hs.len())
-                                std.debug.print("There are more bytes.\n", .{})
-                            else
+                            const hs_len: usize = hs.len();
+                            if (n_read > hs_len) {
+                                std.debug.print("There are more bytes.\n", .{});
+                                const msg_prefix = ctx.buffer.?[hs_len .. hs_len + 4][0..4];
+                                const msg_length: u32 = tcp.Msg.decodeLength(msg_prefix);
+                                std.debug.print("msg prefix: {any}\n", .{msg_prefix});
+                                std.debug.print("msg length: {}\n", .{msg_length});
+                            } else {
                                 std.debug.print("No more bytes left.\n", .{});
+                            }
                         },
 
                         else => |err| std.debug.print(
