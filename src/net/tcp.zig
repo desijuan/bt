@@ -118,16 +118,23 @@ pub const Msg = struct {
         return str;
     }
 
-    pub fn decode(str: []const u8) !Msg {
+    pub fn decode(allocator: std.mem.Allocator, str: []const u8) !Msg {
         if (str.len < 5) return error.InvalidSring;
 
         const length: u32 = decodeLength(str[0..4]);
 
-        if (str.len != 4 + length) return error.InvalidSring;
+        if (length < 1) return error.InvalidLength;
+        if (str.len < 4 + length) return error.InvalidSring;
+
+        const payload: []const u8 = if (length <= 1) &.{} else blk: {
+            const buffer: []u8 = try allocator.alloc(u8, length - 1);
+            @memcpy(buffer, str[5 .. 5 + length - 1]);
+            break :blk buffer;
+        };
 
         return Msg{
             .id = @enumFromInt(str[4]),
-            .payload = str[5..],
+            .payload = payload,
         };
     }
 
@@ -141,12 +148,18 @@ pub const Msg = struct {
 };
 
 test "decode" {
-    const chokeMsg: Msg = try Msg.decode(&.{ 0, 0, 0, 1, 0 });
+    const allocator = std.testing.allocator;
+
+    const chokeMsg: Msg = try Msg.decode(allocator, &.{ 0, 0, 0, 1, 0 });
+    defer allocator.free(chokeMsg.payload);
+
     try std.testing.expect(chokeMsg.eql(
         Msg{ .id = .Choke, .payload = &.{} },
     ));
 
-    const haveMsg: Msg = try Msg.decode(&.{ 0, 0, 0, 5, 4, 0, 0, 0, 1 });
+    const haveMsg: Msg = try Msg.decode(allocator, &.{ 0, 0, 0, 5, 4, 0, 0, 0, 1 });
+    defer allocator.free(haveMsg.payload);
+
     try std.testing.expect(haveMsg.eql(
         Msg{ .id = .Have, .payload = &.{ 0, 0, 0, 1 } },
     ));
