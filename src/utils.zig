@@ -21,3 +21,25 @@ pub fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
 
     return buffer;
 }
+
+pub inline fn range(comptime start: comptime_int, comptime end: comptime_int) [end - start]u8 {
+    comptime {
+        if (start >= end) {
+            @compileError("start must be strictly less than end");
+        }
+
+        var array: [end - start]u8 = undefined;
+
+        for (0..array.len) |i|
+            array[i] = start + i;
+
+        return array;
+    }
+}
+
+test range {
+    const v = range(11, 21);
+    try std.testing.expectEqual(10, v.len);
+    try std.testing.expectEqual(11, v[0]);
+    try std.testing.expectEqual(20, v[9]);
+}
