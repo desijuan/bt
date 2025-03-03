@@ -190,12 +190,40 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                             if (!isAnsPositive) break :blk;
 
                             const hs_len: usize = hs.len();
-                            if (n_read > hs_len) {
+
+                            if (n_read <= hs_len) {
+                                std.debug.print("No more bytes left.\n", .{});
+                                break :blk;
+                            }
+
+                            var offset: usize = hs_len;
+                            var bytes: []const u8 = ctx.buffer[offset..n_read];
+                            var msg_length: u32 = tcp.Msg.decodeLength(bytes[0..4]);
+
+                            while (bytes.len >= msg_length + 4) : ({
+                                offset += @intCast(msg_length + 4);
+
+                                if (offset >= n_read) {
+                                    std.debug.print("No more bytes left.\n", .{});
+                                    break;
+                                }
+
+                                bytes = ctx.buffer[offset..n_read];
+                                msg_length = tcp.Msg.decodeLength(bytes[0..4]);
+                            }) {
                                 std.debug.print("There are more bytes.\n", .{});
-                                const msg_prefix = ctx.buffer[hs_len .. hs_len + 4][0..4];
-                                const msg_length: u32 = tcp.Msg.decodeLength(msg_prefix);
-                                std.debug.print("msg prefix: {any}\n", .{msg_prefix});
-                                std.debug.print("msg length: {}\n", .{msg_length});
+
+                                const msg = tcp.Msg.decode(ally, bytes) catch |err| switch (err) {
+                                    error.UnknownMsgId => {
+                                        std.debug.print("Message Id {} not recognized.\n", .{bytes[4]});
+                                        break :blk;
+                                    },
+
+                                    else => return err,
+                                };
+                                defer ally.free(msg.payload);
+
+                                std.debug.print("msg: {}\n", .{msg});
                             } else {
                                 std.debug.print("No more bytes left.\n", .{});
                             }

@@ -118,22 +118,26 @@ pub const Msg = struct {
         return str;
     }
 
-    pub fn decode(allocator: std.mem.Allocator, str: []const u8) !Msg {
-        if (str.len < 5) return error.InvalidSring;
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !Msg {
+        if (bytes.len < 5) return error.InvalidSring;
 
-        const length: u32 = decodeLength(str[0..4]);
+        const id: u8 = bytes[4];
+
+        if (id >= @typeInfo(MsgId).Enum.fields.len) return error.UnknownMsgId;
+
+        const length: u32 = decodeLength(bytes[0..4]);
 
         if (length < 1) return error.InvalidLength;
-        if (str.len < 4 + length) return error.InvalidSring;
+        if (bytes.len < 4 + length) return error.InvalidSring;
 
         const payload: []const u8 = if (length <= 1) &.{} else blk: {
             const buffer: []u8 = try allocator.alloc(u8, length - 1);
-            @memcpy(buffer, str[5 .. 5 + length - 1]);
+            @memcpy(buffer, bytes[5 .. 5 + length - 1]);
             break :blk buffer;
         };
 
         return Msg{
-            .id = @enumFromInt(str[4]),
+            .id = @enumFromInt(id),
             .payload = payload,
         };
     }
