@@ -1,13 +1,13 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const Parser = @import("bencode/parser.zig");
-const bencode_data = @import("bencode/data.zig");
+const Parser = @import("bencode/Parser.zig");
+const bencode = @import("bencode/data.zig");
 const http = @import("net/http.zig");
 const loop = @import("loop.zig");
 
-const TorrentFile = bencode_data.TorrentFile;
-const TorrentInfo = bencode_data.TorrentInfo;
-const TrackerResponse = bencode_data.TrackerResponse;
+const TorrentFile = bencode.TorrentFile;
+const TorrentInfo = bencode.TorrentInfo;
+const TrackerResponse = bencode.TrackerResponse;
 
 pub fn main() !void {
     var gpa_inst = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};

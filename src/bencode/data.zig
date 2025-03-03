@@ -1,5 +1,5 @@
 const std = @import("std");
-const Parser = @import("parser.zig");
+const Parser = @import("Parser.zig");
 
 pub const TorrentFile = struct {
     const N = 6;

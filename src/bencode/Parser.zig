@@ -107,7 +107,7 @@ pub fn parseDict(self: *Self, comptime T: type, dto: *T) ParseError!void {
     while (self.i < self.buf.len and self.peekChar() != 'e') {
         const key = try self.parseStr();
 
-        blk: inline for (T.key_names, T.field_names, T.data_types) |name, field, data_type|
+        inline for (T.key_names, T.field_names, T.data_types) |name, field, data_type|
             if (std.mem.eql(u8, name, key)) {
                 @field(dto, field) = switch (data_type) {
                     .int => try self.parseInt(),
@@ -116,7 +116,7 @@ pub fn parseDict(self: *Self, comptime T: type, dto: *T) ParseError!void {
                     .dict => try self.parseDictAsStr(),
                 };
 
-                break :blk;
+                break;
             };
     }
 

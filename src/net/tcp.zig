@@ -62,7 +62,7 @@ pub const Handshake = struct {
         return 1 + self.pstr.len + self.reserved.len + self.info_hash.len + self.peer_id.len;
     }
 
-    pub fn serialize(self: Handshake, allocator: std.mem.Allocator) ![]const u8 {
+    pub fn serialize(self: Handshake, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
         const str_len: usize = self.len();
         const str: []u8 = try allocator.alloc(u8, str_len);
 
@@ -71,7 +71,6 @@ pub const Handshake = struct {
         var offset: usize = 1;
         inline for (@typeInfo(Handshake).Struct.fields) |field| {
             const value = @field(self, field.name);
-
             @memcpy(str[offset .. offset + value.len], value);
             offset += value.len;
         }
@@ -107,32 +106,56 @@ pub const Msg = struct {
         return 5 + self.payload.len;
     }
 
-    pub fn serialize(self: Msg, allocator: std.mem.Allocator) ![]const u8 {
-        const str_len: usize = self.len();
-        const str: []u8 = try allocator.alloc(u8, str_len);
+    pub fn serialize(self: Msg, bytes: []u8) error{InvalidBytes}!void {
+        const bytes_len: u32 = @intCast(self.len());
 
-        std.mem.writeInt(usize, str[0..4], str_len, .big);
-        str[4] = @intFromEnum(self.id);
-        @memcpy(str[5 .. 5 + self.payload.len], self.payload);
+        if (bytes_len != bytes.len) return error.InvalidBytes;
 
-        return str;
+        std.mem.writeInt(u32, bytes[0..4], bytes_len - 4, .big);
+        bytes[4] = @intFromEnum(self.id);
+        @memcpy(bytes[5 .. 5 + self.payload.len], self.payload);
     }
 
-    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !Msg {
-        if (bytes.len < 5) return error.InvalidSring;
+    pub fn serializeAlloc(self: Msg, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+        const bytes_len: u32 = @intCast(self.len());
+        const bytes: []u8 = try allocator.alloc(u8, bytes_len);
+
+        std.mem.writeInt(u32, bytes[0..4], bytes_len - 4, .big);
+        bytes[4] = @intFromEnum(self.id);
+        @memcpy(bytes[5 .. 5 + self.payload.len], self.payload);
+
+        return bytes;
+    }
+
+    const DecodeError = error{
+        InvalidBytes,
+        InvalidLength,
+        UnknownMsgId,
+        ReceivedKeepAliveMsg,
+        OutOfMemory,
+    };
+
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Msg {
+        if (bytes.len < 4) return error.InvalidBytes;
+
+        const length_prefix: u32 = decodeLengthPrefix(bytes[0..4]);
+
+        if (length_prefix < 0)
+            return error.InvalidLength
+        else if (length_prefix == 0)
+            return error.ReceivedKeepAliveMsg;
+
+        if (bytes.len < 5) return error.InvalidBytes;
 
         const id: u8 = bytes[4];
 
         if (id >= @typeInfo(MsgId).Enum.fields.len) return error.UnknownMsgId;
 
-        const length: u32 = decodeLength(bytes[0..4]);
+        if (bytes.len < 4 + length_prefix) return error.InvalidBytes;
 
-        if (length < 1) return error.InvalidLength;
-        if (bytes.len < 4 + length) return error.InvalidSring;
-
-        const payload: []const u8 = if (length <= 1) &.{} else blk: {
-            const buffer: []u8 = try allocator.alloc(u8, length - 1);
-            @memcpy(buffer, bytes[5 .. 5 + length - 1]);
+        const payload: []const u8 = if (length_prefix <= 1) &.{} else blk: {
+            const buffer: []u8 = try allocator.alloc(u8, length_prefix - 1);
+            @memcpy(buffer, bytes[5 .. 5 + length_prefix - 1]);
             break :blk buffer;
         };
 
@@ -142,34 +165,71 @@ pub const Msg = struct {
         };
     }
 
-    pub fn decodeLength(str: *const [4]u8) u32 {
-        return (@as(u32, str[0]) << 24) | (@as(u32, str[1]) << 16) | (@as(u32, str[2]) << 8) | @as(u32, str[3]);
+    pub inline fn decodeLengthPrefix(bytes: *const [4]u8) u32 {
+        return std.mem.readInt(u32, bytes, .big);
     }
 
     pub fn eql(self: Msg, other: Msg) bool {
         return self.id == other.id and std.mem.eql(u8, self.payload, other.payload);
     }
+
+    pub inline fn interested() Msg {
+        return Msg{ .id = .Interested, .payload = &.{} };
+    }
 };
 
-test "decode" {
-    const allocator = std.testing.allocator;
+const testing = std.testing;
 
-    const chokeMsg: Msg = try Msg.decode(allocator, &.{ 0, 0, 0, 1, 0 });
-    defer allocator.free(chokeMsg.payload);
+test "Msg.len" {
+    const ally = testing.allocator;
 
-    try std.testing.expect(chokeMsg.eql(
+    const chokeMsg: Msg = try Msg.decode(ally, &.{ 0, 0, 0, 1, 0 });
+    defer ally.free(chokeMsg.payload);
+
+    try testing.expectEqual(5, chokeMsg.len());
+}
+
+test "Msg.decode" {
+    const ally = testing.allocator;
+
+    const chokeMsg: Msg = try Msg.decode(ally, &.{ 0, 0, 0, 1, 0 });
+    defer ally.free(chokeMsg.payload);
+
+    try testing.expect(chokeMsg.eql(
         Msg{ .id = .Choke, .payload = &.{} },
     ));
 
-    const haveMsg: Msg = try Msg.decode(allocator, &.{ 0, 0, 0, 5, 4, 0, 0, 0, 1 });
-    defer allocator.free(haveMsg.payload);
+    const haveMsg: Msg = try Msg.decode(ally, &.{ 0, 0, 0, 5, 4, 0, 0, 0, 1 });
+    defer ally.free(haveMsg.payload);
 
-    try std.testing.expect(haveMsg.eql(
+    try testing.expect(haveMsg.eql(
         Msg{ .id = .Have, .payload = &.{ 0, 0, 0, 1 } },
     ));
+
+    try testing.expectError(error.ReceivedKeepAliveMsg, Msg.decode(ally, &.{ 0, 0, 0, 0 }));
 }
 
-test "decodeMsgLength" {
-    try std.testing.expectEqual(1, Msg.decodeLength(&.{ 0, 0, 0, 1 }));
-    try std.testing.expectEqual(317, Msg.decodeLength(&.{ 0, 0, 1, 61 }));
+test "Msg.decodeLengthPrefix" {
+    try std.testing.expectEqual(1, Msg.decodeLengthPrefix(&.{ 0, 0, 0, 1 }));
+    try std.testing.expectEqual(317, Msg.decodeLengthPrefix(&.{ 0, 0, 1, 61 }));
+}
+
+test "Msg.serialize" {
+    const msg = Msg{ .id = .Interested, .payload = &.{} };
+
+    var bytes: [msg.len()]u8 = undefined;
+    try msg.serialize(&bytes);
+
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 1, 2 }, &bytes);
+}
+
+test "Msg.serializeAlloc" {
+    const ally = testing.allocator;
+
+    const msg = Msg{ .id = .Interested, .payload = &.{} };
+
+    const bytes: []const u8 = try msg.serializeAlloc(ally);
+    defer ally.free(bytes);
+
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 1, 2 }, bytes);
 }
