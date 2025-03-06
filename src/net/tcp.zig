@@ -69,7 +69,7 @@ pub const Handshake = struct {
         str[0] = @intCast(self.pstr.len);
 
         var offset: usize = 1;
-        inline for (@typeInfo(Handshake).Struct.fields) |field| {
+        inline for (@typeInfo(Handshake).@"struct".fields) |field| {
             const value = @field(self, field.name);
             @memcpy(str[offset .. offset + value.len], value);
             offset += value.len;
@@ -149,7 +149,7 @@ pub const Msg = struct {
 
         const id: u8 = bytes[4];
 
-        if (id >= @typeInfo(MsgId).Enum.fields.len) return error.UnknownMsgId;
+        if (id >= @typeInfo(MsgId).@"enum".fields.len) return error.UnknownMsgId;
 
         if (bytes.len < 4 + length_prefix) return error.InvalidBytes;
 

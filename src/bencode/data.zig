@@ -40,8 +40,8 @@ pub const TorrentFile = struct {
     url_list: []const u8,
 
     pub fn print(self: TorrentFile) !void {
-        inline for (@typeInfo(TorrentFile).Struct.fields) |field| switch (@typeInfo(field.type)) {
-            .Pointer => if (comptime std.mem.eql(u8, "info", field.name))
+        inline for (@typeInfo(TorrentFile).@"struct".fields) |field| switch (@typeInfo(field.type)) {
+            .pointer => if (comptime std.mem.eql(u8, "info", field.name))
                 std.debug.print("{s}: {s} [..]\n", .{ field.name, self.info[0..90] })
             else if (comptime std.mem.eql(u8, "info_hash", field.name)) {
                 std.debug.print("{s}: '", .{field.name});
@@ -52,7 +52,7 @@ pub const TorrentFile = struct {
                 try Parser.printList(self.url_list);
             } else std.debug.print("{s}: '{s}'\n", .{ field.name, @field(self, field.name) }),
 
-            .Int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
+            .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
 
             else => unreachable,
         };
@@ -89,13 +89,13 @@ pub const TorrentInfo = struct {
     pieces: []const u8,
 
     pub fn print(self: TorrentInfo) void {
-        inline for (@typeInfo(TorrentInfo).Struct.fields) |field| switch (@typeInfo(field.type)) {
-            .Pointer => if (comptime std.mem.eql(u8, "pieces", field.name))
+        inline for (@typeInfo(TorrentInfo).@"struct".fields) |field| switch (@typeInfo(field.type)) {
+            .pointer => if (comptime std.mem.eql(u8, "pieces", field.name))
                 std.debug.print("{s}: {x} [..]\n", .{ field.name, self.pieces[0..20] })
             else
                 std.debug.print("{s}: '{s}'\n", .{ field.name, @field(self, field.name) }),
 
-            .Int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
+            .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
 
             else => unreachable,
         };
@@ -124,10 +124,10 @@ pub const TrackerResponse = struct {
     peers: []const u8,
 
     pub fn print(self: TrackerResponse) void {
-        inline for (@typeInfo(TrackerResponse).Struct.fields) |field| switch (@typeInfo(field.type)) {
-            .Pointer => std.debug.print("{s}: {x} [..]\n", .{ field.name, @field(self, field.name)[0..20] }),
+        inline for (@typeInfo(TrackerResponse).@"struct".fields) |field| switch (@typeInfo(field.type)) {
+            .pointer => std.debug.print("{s}: {x} [..]\n", .{ field.name, @field(self, field.name)[0..20] }),
 
-            .Int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
+            .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
 
             else => unreachable,
         };
