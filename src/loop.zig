@@ -6,12 +6,12 @@ const posix = std.posix;
 const linux = std.os.linux;
 const IoUring = linux.IoUring;
 
-const BUFFER_SIZE = 16 * 1024;
+const BUFFER_SIZE = 512;
 
 const TIMEOUT_MS: c_int = 2000;
 const N_CONNS: u16 = 8;
 
-const Event = enum {
+const Command = enum {
     SOCKET,
     CONNECT,
     SEND,
@@ -23,8 +23,6 @@ const State = enum {
     Off,
     CreatingSocket,
     ConnectingToPeer,
-    SendingHandshake,
-    SendingInterestedMsg,
     ExpectingHandshake,
     ExpectingBitfieldMsg,
     ExpectingUnChokeMsg,
@@ -37,9 +35,8 @@ const State = enum {
 const Ctx = struct {
     fd: i32,
     err: linux.E,
-    event: Event,
+    cmd: Command,
     state: State,
-    isChoked: bool,
     peer: tcp.Peer,
     peer_bf: []const u8,
     buffer: []u8,
@@ -83,9 +80,8 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
         clients[i] = Ctx{
             .fd = -1,
             .err = .SUCCESS,
-            .event = .SOCKET,
+            .cmd = .SOCKET,
             .state = .CreatingSocket,
-            .isChoked = true,
             .peer = peer,
             .peer_bf = &.{},
             .buffer = buffers[i .. i + BUFFER_SIZE],
@@ -100,6 +96,8 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
         );
     } else N_CONNS;
 
+    var unchokes: u32 = 0;
+
     var pending: i32 = n_conns;
     while (pending > 0) {
         _ = try ring.submit_and_wait(1);
@@ -111,7 +109,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
             const err: linux.E = cqe.err();
             ctx.err = err;
 
-            switch (ctx.event) {
+            switch (ctx.cmd) {
                 .SOCKET => switch (err) {
                     .SUCCESS => {
                         const fd: i32 = cqe.res;
@@ -128,7 +126,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                         const addr: std.net.Address = ctx.peer.address();
 
-                        ctx.event = .CONNECT;
+                        ctx.cmd = .CONNECT;
                         ctx.state = .ConnectingToPeer;
                         _ = try ring.connect(@intFromPtr(ctx), fd, &addr.any, addr.getOsSockLen());
                     },
@@ -143,8 +141,8 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                     .SUCCESS => {
                         std.debug.print("Connected to fd {} @ {}, sending handshake...\n", .{ ctx.fd, ctx.peer });
 
-                        ctx.event = .SEND;
-                        ctx.state = .SendingHandshake;
+                        ctx.cmd = .SEND;
+                        ctx.state = .ExpectingHandshake;
                         _ = try ring.send(@intFromPtr(ctx), ctx.fd, handshake, 0);
                     },
 
@@ -155,7 +153,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                         );
 
                         const peer: tcp.Peer = peers.next() orelse {
-                            ctx.event = .CLOSE;
+                            ctx.cmd = .CLOSE;
                             ctx.state = .ShuttingDown;
                             _ = try ring.close(@intFromPtr(ctx), ctx.fd);
 
@@ -170,7 +168,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                         const addr: std.net.Address = peer.address();
 
-                        ctx.event = .CONNECT;
+                        ctx.cmd = .CONNECT;
                         ctx.state = .ConnectingToPeer;
                         _ = try ring.connect(@intFromPtr(ctx), ctx.fd, &addr.any, addr.getOsSockLen());
                     },
@@ -181,27 +179,16 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
-                        ctx.event = .CLOSE;
+                        ctx.cmd = .CLOSE;
                         ctx.state = .ClosingConnection;
                         _ = try ring.close(@intFromPtr(ctx), ctx.fd);
                     },
                 },
 
                 .SEND => switch (err) {
-                    .SUCCESS => switch (ctx.state) {
-                        .SendingHandshake => {
-                            ctx.event = .RECV;
-                            ctx.state = .ExpectingHandshake;
-                            _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
-                        },
-
-                        .SendingInterestedMsg => {
-                            ctx.event = .RECV;
-                            ctx.state = .ExpectingBitfieldMsg;
-                            _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
-                        },
-
-                        else => |state| try debugState(state),
+                    .SUCCESS => {
+                        ctx.cmd = .RECV;
+                        _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
                     },
 
                     else => {
@@ -210,255 +197,167 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
-                        ctx.event = .CLOSE;
+                        ctx.cmd = .CLOSE;
                         ctx.state = .ClosingConnection;
                         _ = try ring.close(@intFromPtr(ctx), ctx.fd);
                     },
                 },
 
                 .RECV => switch (err) {
-                    .SUCCESS => {
+                    .SUCCESS => blk: {
                         const n_read: usize = @intCast(cqe.res);
-                        const recvd_bytes: []const u8 = ctx.buffer[0..n_read];
+
+                        var offset: usize = 0;
+                        var bytes: []const u8 = ctx.buffer[offset..n_read];
 
                         std.debug.print(
                             "Received {} bytes from fd {} @ {}: {any}.\n",
-                            .{ n_read, ctx.fd, ctx.peer, recvd_bytes },
+                            .{ n_read, ctx.fd, ctx.peer, bytes },
                         );
 
-                        switch (ctx.state) {
-                            .ExpectingHandshake => blk: {
-                                const isAnsPositive: bool = tcp.validateAnswer(recvd_bytes, info_hash);
+                        if (bytes.len < 4) {
+                            std.debug.print(
+                                "Didn't receive enough bytes. Closing fd {} @ {}.\n",
+                                .{ ctx.fd, ctx.peer },
+                            );
+
+                            ctx.cmd = .CLOSE;
+                            ctx.state = .ClosingConnection;
+                            _ = try ring.close(@intFromPtr(ctx), ctx.fd);
+
+                            break :blk;
+                        }
+
+                        if (isKeepAliveMsg(bytes)) {
+                            std.debug.print(
+                                "Received keep-alive msg from fd {} @ {}. Waiting for more bytes...\n",
+                                .{ ctx.fd, ctx.peer },
+                            );
+
+                            ctx.cmd = .RECV;
+                            _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
+
+                            break :blk;
+                        }
+
+                        state: switch (ctx.state) {
+                            .ExpectingHandshake => {
+                                const isAnsPositive: bool = tcp.validateAnswer(bytes, info_hash);
 
                                 std.debug.print("Valid ans: {}\n", .{isAnsPositive});
 
                                 if (!isAnsPositive) {
-                                    ctx.event = .CLOSE;
                                     ctx.state = .ClosingConnection;
-                                    _ = try ring.close(@intFromPtr(ctx), ctx.fd);
-
-                                    break :blk;
+                                    continue :state .ClosingConnection;
                                 }
 
-                                const hs_len: usize = hs.len();
+                                offset += hs.len();
+                                bytes = ctx.buffer[offset..n_read];
 
-                                if (n_read <= hs_len) {
+                                if (bytes.len <= 0) {
                                     std.debug.print("No more bytes left. Asking for more.\n", .{});
 
                                     const msg = tcp.Msg.interested();
-                                    var bytes: [msg.len()]u8 = undefined;
-                                    try msg.serialize(&bytes);
+                                    var msg_bytes: [msg.len()]u8 = undefined;
+                                    try msg.serialize(&msg_bytes);
                                     std.debug.print(
                                         "Sending interested msg to fd {} @ {}: {any}.\n",
-                                        .{ ctx.fd, ctx.peer, bytes },
+                                        .{ ctx.fd, ctx.peer, msg_bytes },
                                     );
 
-                                    ctx.event = .SEND;
-                                    ctx.state = .SendingInterestedMsg;
-                                    _ = try ring.send(@intFromPtr(ctx), ctx.fd, &bytes, 0);
-
-                                    break :blk;
-                                }
-
-                                var offset: usize = hs_len;
-                                var bytes: []const u8 = ctx.buffer[offset..n_read];
-                                var msg_length: u32 = tcp.Msg.decodeLengthPrefix(bytes[0..4]);
-
-                                if (msg_length == 0) {
-                                    // Received keep-alive msg
-
-                                    ctx.event = .RECV;
+                                    ctx.cmd = .SEND;
                                     ctx.state = .ExpectingBitfieldMsg;
-                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
+                                    _ = try ring.send(@intFromPtr(ctx), ctx.fd, &msg_bytes, 0);
 
                                     break :blk;
                                 }
 
-                                if (bytes.len >= msg_length + 4) {
-                                    std.debug.print("There are more bytes.\n", .{});
-
-                                    const msg = tcp.Msg.decode(ally, bytes) catch |e| switch (e) {
-                                        error.UnknownMsgId => {
-                                            std.debug.print("Message Id {} not recognized.\n", .{bytes[4]});
-
-                                            ctx.event = .CLOSE;
-                                            ctx.state = .ClosingConnection;
-                                            _ = try ring.close(@intFromPtr(ctx), ctx.fd);
-
-                                            break :blk;
-                                        },
-
-                                        else => return e,
-                                    };
-                                    defer if (msg.id != .Bitfield) ally.free(msg.payload);
-
-                                    std.debug.print("msg: {}\n", .{msg});
-
-                                    if (msg.id == .Bitfield) {
-                                        ally.free(ctx.peer_bf);
-                                        ctx.peer_bf = msg.payload;
-                                    }
-                                }
-
-                                offset += @intCast(msg_length + 4);
-
-                                if (offset >= n_read) {
+                                if (bytes.len < 4) {
                                     std.debug.print(
-                                        "No more bytes left. Waiting for unchoke msg from fd {} @ {}...\n",
-                                        .{ ctx.fd, ctx.peer },
+                                        "Didn't understand: {any}.\nClosing fd {} @ {}.\nctx: {any}\n",
+                                        .{ bytes, ctx.fd, ctx.peer, ctx },
                                     );
 
-                                    ctx.event = .RECV;
-                                    ctx.state = .ExpectingUnChokeMsg;
-                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
-
-                                    break :blk;
+                                    ctx.state = .ClosingConnection;
+                                    continue :state .ClosingConnection;
                                 }
 
-                                bytes = ctx.buffer[offset..n_read];
-                                msg_length = tcp.Msg.decodeLengthPrefix(bytes[0..4]);
-
-                                if (msg_length == 0) {
-                                    // Received keep-alive msg
-
-                                    ctx.event = .RECV;
-                                    ctx.state = .ExpectingUnChokeMsg;
-                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
-
-                                    break :blk;
-                                }
-
-                                if (bytes.len >= msg_length + 4) {
-                                    std.debug.print("There are more bytes.\n", .{});
-
-                                    const msg = tcp.Msg.decode(ally, bytes) catch |e| switch (e) {
-                                        error.UnknownMsgId => {
-                                            std.debug.print("Message Id {} not recognized.\n", .{bytes[4]});
-
-                                            ctx.event = .CLOSE;
-                                            ctx.state = .ClosingConnection;
-                                            _ = try ring.close(@intFromPtr(ctx), ctx.fd);
-
-                                            break :blk;
-                                        },
-
-                                        else => return e,
-                                    };
-                                    defer ally.free(msg.payload);
-
-                                    std.debug.print("msg: {}\n", .{msg});
-                                }
-
-                                ctx.event = .CLOSE;
-                                ctx.state = .ClosingConnection;
-                                _ = try ring.close(@intFromPtr(ctx), ctx.fd);
+                                ctx.state = .ExpectingBitfieldMsg;
+                                continue :state .ExpectingBitfieldMsg;
                             },
 
-                            .ExpectingBitfieldMsg => blk: {
-                                var offset: usize = 0;
-                                var bytes: []const u8 = ctx.buffer[offset..n_read];
-                                var msg_length: u32 = tcp.Msg.decodeLengthPrefix(bytes[0..4]);
+                            .ExpectingBitfieldMsg => {
+                                const msg_length: u32 = tcp.Msg.decodeLengthPrefix(bytes[0..4]);
 
-                                if (msg_length == 0) {
-                                    // Received keep-alive msg
-
-                                    ctx.event = .RECV;
-                                    ctx.state = .ExpectingBitfieldMsg;
-                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
-
-                                    break :blk;
-                                }
-
-                                if (bytes.len >= msg_length + 4) {
-                                    std.debug.print("There are more bytes.\n", .{});
-
-                                    const msg = tcp.Msg.decode(ally, bytes) catch |e| switch (e) {
-                                        error.UnknownMsgId => {
-                                            std.debug.print("Message Id {} not recognized.\n", .{bytes[4]});
-
-                                            ctx.event = .CLOSE;
-                                            ctx.state = .ClosingConnection;
-                                            _ = try ring.close(@intFromPtr(ctx), ctx.fd);
-
-                                            break :blk;
-                                        },
-
-                                        else => return e,
-                                    };
-                                    defer if (msg.id != .Bitfield) ally.free(msg.payload);
-
-                                    std.debug.print("msg: {}\n", .{msg});
-
-                                    if (msg.id == .Bitfield) {
-                                        ally.free(ctx.peer_bf);
-                                        ctx.peer_bf = msg.payload;
-                                    }
-                                }
-
-                                offset += @intCast(msg_length + 4);
-
-                                if (offset >= n_read) {
+                                if (bytes.len < msg_length + 4) {
                                     std.debug.print(
-                                        "No more bytes left. Waiting for unchoke msg from fd {} @ {}...\n",
-                                        .{ ctx.fd, ctx.peer },
+                                        "Didn't understand: {any}.\nClosing fd {} @ {}.\nctx: {any}\n",
+                                        .{ bytes, ctx.fd, ctx.peer, ctx },
                                     );
 
-                                    ctx.event = .RECV;
-                                    ctx.state = .ExpectingUnChokeMsg;
-                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
-
-                                    break :blk;
+                                    ctx.state = .ClosingConnection;
+                                    continue :state .ClosingConnection;
                                 }
 
-                                bytes = ctx.buffer[offset..n_read];
-                                msg_length = tcp.Msg.decodeLengthPrefix(bytes[0..4]);
-
-                                if (msg_length == 0) {
-                                    // Received keep-alive msg
-
-                                    ctx.event = .RECV;
-                                    ctx.state = .ExpectingUnChokeMsg;
-                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
-
-                                    break :blk;
-                                }
-
-                                if (bytes.len >= msg_length + 4) {
-                                    std.debug.print("There are more bytes.\n", .{});
-
-                                    const msg = tcp.Msg.decode(ally, bytes) catch |e| switch (e) {
-                                        error.UnknownMsgId => {
-                                            std.debug.print("Message Id {} not recognized.\n", .{bytes[4]});
-
-                                            ctx.event = .CLOSE;
-                                            ctx.state = .ClosingConnection;
-                                            _ = try ring.close(@intFromPtr(ctx), ctx.fd);
-
-                                            break :blk;
-                                        },
-
-                                        else => return e,
-                                    };
-                                    defer ally.free(msg.payload);
-
-                                    std.debug.print("msg: {}\n", .{msg});
-                                }
-
-                                ctx.event = .CLOSE;
-                                ctx.state = .ClosingConnection;
-                                _ = try ring.close(@intFromPtr(ctx), ctx.fd);
-                            },
-
-                            .ExpectingUnChokeMsg => blk: {
-                                const msg = tcp.Msg.decode(ally, recvd_bytes) catch |e| switch (e) {
+                                const msg = tcp.Msg.decode(ally, bytes) catch |e| switch (e) {
                                     error.UnknownMsgId => {
-                                        std.debug.print("Message Id {} not recognized.\n", .{recvd_bytes[4]});
+                                        std.debug.print(
+                                            "Message Id {} not recognized in {any}.\n",
+                                            .{ bytes[4], bytes[0..5] },
+                                        );
 
-                                        ctx.event = .CLOSE;
                                         ctx.state = .ClosingConnection;
-                                        _ = try ring.close(@intFromPtr(ctx), ctx.fd);
+                                        continue :state .ClosingConnection;
+                                    },
 
-                                        break :blk;
+                                    else => return e,
+                                };
+                                defer if (msg.id != .Bitfield) ally.free(msg.payload);
+
+                                std.debug.print("msg: {}\n", .{msg});
+
+                                if (msg.id == .Bitfield) {
+                                    ally.free(ctx.peer_bf);
+                                    ctx.peer_bf = msg.payload;
+                                }
+
+                                offset += @intCast(msg_length + 4);
+                                bytes = ctx.buffer[offset..n_read];
+
+                                if (bytes.len <= 0) {
+                                    std.debug.print(
+                                        "No more bytes left. Waiting for unchoke msg from fd {} @ {}...\n",
+                                        .{ ctx.fd, ctx.peer },
+                                    );
+
+                                    ctx.cmd = .RECV;
+                                    ctx.state = .ExpectingUnChokeMsg;
+                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
+
+                                    break :blk;
+                                }
+
+                                if (bytes.len < 4) {
+                                    std.debug.print(
+                                        "Didn't understand: {any}\n. Closing fd {} @ {}.\n",
+                                        .{ bytes, ctx.fd, ctx.peer },
+                                    );
+
+                                    ctx.state = .ClosingConnection;
+                                    continue :state .ClosingConnection;
+                                }
+
+                                ctx.state = .ExpectingUnChokeMsg;
+                                continue :state .ExpectingUnChokeMsg;
+                            },
+
+                            .ExpectingUnChokeMsg => {
+                                const msg = tcp.Msg.decode(ally, bytes) catch |e| switch (e) {
+                                    error.UnknownMsgId => {
+                                        std.debug.print("Message Id {} not recognized.\n", .{bytes[4]});
+
+                                        ctx.state = .ClosingConnection;
+                                        continue :state .ClosingConnection;
                                     },
 
                                     else => return e,
@@ -467,8 +366,25 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                                 std.debug.print("msg: {}\n", .{msg});
 
-                                ctx.event = .CLOSE;
+                                if (msg.id == .Unchoke) {
+                                    std.debug.print(
+                                        "Got Unchoke Msg from fd {} @ {}!\n",
+                                        .{ ctx.fd, ctx.peer },
+                                    );
+                                    unchokes += 1;
+                                }
+
                                 ctx.state = .ClosingConnection;
+                                continue :state .ClosingConnection;
+                            },
+
+                            .ClosingConnection => {
+                                std.debug.print(
+                                    "Closing fd {} @ {}.\n",
+                                    .{ ctx.fd, ctx.peer },
+                                );
+
+                                ctx.cmd = .CLOSE;
                                 _ = try ring.close(@intFromPtr(ctx), ctx.fd);
                             },
 
@@ -478,11 +394,11 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                     else => {
                         std.debug.print(
-                            "Recv from fd {} @ {} returned error {s}.\n",
+                            "Recv from fd {} @ {} returned error {s}. Closing the connection.\n",
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
-                        ctx.event = .CLOSE;
+                        ctx.cmd = .CLOSE;
                         ctx.state = .ClosingConnection;
                         _ = try ring.close(@intFromPtr(ctx), ctx.fd);
                     },
@@ -515,7 +431,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                     ctx.fd = -1;
                     ctx.peer = peer;
-                    ctx.event = .SOCKET;
+                    ctx.cmd = .SOCKET;
                     ctx.state = .CreatingSocket;
 
                     _ = try ring.socket(
@@ -529,6 +445,16 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
             }
         }
     }
+
+    std.debug.print("\nReceived a total of {} unchokes.\n", .{unchokes});
+}
+
+inline fn isKeepAliveMsg(bytes: []const u8) bool {
+    return (bytes.len >= 4 and
+        bytes[0] == 0 and
+        bytes[1] == 0 and
+        bytes[2] == 0 and
+        bytes[3] == 0);
 }
 
 fn debugState(state: State) error{InvalidState}!void {
@@ -541,7 +467,7 @@ fn printInfo(T: type) void {
 }
 
 test "prueba" {
-    printInfo(Event);
+    printInfo(Command);
     printInfo(State);
     printInfo(tcp.Peer);
     printInfo(Ctx);
