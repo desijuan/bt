@@ -169,6 +169,14 @@ pub const Msg = struct {
     pub inline fn interested() Msg {
         return Msg{ .id = .Interested, .payload = &.{} };
     }
+
+    pub fn request(index: u32, begin: u32, length: u32, bytes: *[12]u8) Msg {
+        std.mem.writeInt(u32, bytes[0..4], index, .big);
+        std.mem.writeInt(u32, bytes[4..8], begin, .big);
+        std.mem.writeInt(u32, bytes[8..12], length, .big);
+
+        return Msg{ .id = .Request, .payload = bytes };
+    }
 };
 
 const testing = std.testing;
@@ -218,4 +226,13 @@ test "Msg.serializeAlloc" {
     defer ally.free(bytes);
 
     try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 1, 2 }, bytes);
+}
+
+test "Msg.request" {
+    var bytes: [12]u8 = undefined;
+    const msg = Msg.request(1, 256, 258, &bytes);
+
+    try testing.expect(msg.eql(
+        Msg{ .id = .Request, .payload = &.{ 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 2 } },
+    ));
 }

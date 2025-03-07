@@ -101,3 +101,8 @@ pub fn main() !void {
 
     std.debug.print("\nAll done!\n", .{});
 }
+
+comptime {
+    _ = @import("utils.zig");
+    _ = @import("net/tcp.zig");
+}

@@ -39,6 +39,7 @@ pub inline fn range(comptime start: comptime_int, comptime end: comptime_int) [e
 
 test range {
     const v = range(11, 21);
+
     try std.testing.expectEqual(10, v.len);
     try std.testing.expectEqual(11, v[0]);
     try std.testing.expectEqual(20, v[9]);
