@@ -132,10 +132,9 @@ pub const Msg = struct {
         InvalidLength,
         UnknownMsgId,
         ReceivedKeepAliveMsg,
-        OutOfMemory,
     };
 
-    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) DecodeError!Msg {
+    pub fn decode(bytes: []const u8) DecodeError!Msg {
         if (bytes.len < 4) return error.InvalidBytes;
 
         const length_prefix: u32 = decodeLengthPrefix(bytes[0..4]);
@@ -153,15 +152,9 @@ pub const Msg = struct {
 
         if (bytes.len < 4 + length_prefix) return error.InvalidBytes;
 
-        const payload: []const u8 = if (length_prefix <= 1) &.{} else blk: {
-            const buffer: []u8 = try allocator.alloc(u8, length_prefix - 1);
-            @memcpy(buffer, bytes[5 .. 5 + length_prefix - 1]);
-            break :blk buffer;
-        };
-
         return Msg{
             .id = @enumFromInt(id),
-            .payload = payload,
+            .payload = bytes[5 .. 5 + length_prefix - 1],
         };
     }
 
@@ -181,32 +174,25 @@ pub const Msg = struct {
 const testing = std.testing;
 
 test "Msg.len" {
-    const ally = testing.allocator;
-
-    const chokeMsg: Msg = try Msg.decode(ally, &.{ 0, 0, 0, 1, 0 });
-    defer ally.free(chokeMsg.payload);
+    const chokeMsg: Msg = try Msg.decode(&.{ 0, 0, 0, 1, 0 });
 
     try testing.expectEqual(5, chokeMsg.len());
 }
 
 test "Msg.decode" {
-    const ally = testing.allocator;
-
-    const chokeMsg: Msg = try Msg.decode(ally, &.{ 0, 0, 0, 1, 0 });
-    defer ally.free(chokeMsg.payload);
+    const chokeMsg: Msg = try Msg.decode(&.{ 0, 0, 0, 1, 0 });
 
     try testing.expect(chokeMsg.eql(
         Msg{ .id = .Choke, .payload = &.{} },
     ));
 
-    const haveMsg: Msg = try Msg.decode(ally, &.{ 0, 0, 0, 5, 4, 0, 0, 0, 1 });
-    defer ally.free(haveMsg.payload);
+    const haveMsg: Msg = try Msg.decode(&.{ 0, 0, 0, 5, 4, 0, 0, 0, 1 });
 
     try testing.expect(haveMsg.eql(
         Msg{ .id = .Have, .payload = &.{ 0, 0, 0, 1 } },
     ));
 
-    try testing.expectError(error.ReceivedKeepAliveMsg, Msg.decode(ally, &.{ 0, 0, 0, 0 }));
+    try testing.expectError(error.ReceivedKeepAliveMsg, Msg.decode(&.{ 0, 0, 0, 0 }));
 }
 
 test "Msg.decodeLengthPrefix" {

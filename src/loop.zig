@@ -299,7 +299,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                                     continue :state .ClosingConnection;
                                 }
 
-                                const msg = tcp.Msg.decode(ally, bytes) catch |e| switch (e) {
+                                const msg = tcp.Msg.decode(bytes) catch |e| switch (e) {
                                     error.UnknownMsgId => {
                                         std.debug.print(
                                             "Message Id {} not recognized in {any}.\n",
@@ -312,13 +312,13 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                                     else => return e,
                                 };
-                                defer if (msg.id != .Bitfield) ally.free(msg.payload);
 
                                 std.debug.print("msg: {}\n", .{msg});
 
                                 if (msg.id == .Bitfield) {
-                                    ally.free(ctx.peer_bf);
-                                    ctx.peer_bf = msg.payload;
+                                    const bitfield: []u8 = try ally.alloc(u8, msg.payload.len);
+                                    @memcpy(bitfield, msg.payload);
+                                    ctx.peer_bf = bitfield;
                                 }
 
                                 offset += @intCast(msg_length + 4);
@@ -352,7 +352,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                             },
 
                             .ExpectingUnChokeMsg => {
-                                const msg = tcp.Msg.decode(ally, bytes) catch |e| switch (e) {
+                                const msg = tcp.Msg.decode(bytes) catch |e| switch (e) {
                                     error.UnknownMsgId => {
                                         std.debug.print("Message Id {} not recognized.\n", .{bytes[4]});
 
@@ -362,7 +362,6 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                                     else => return e,
                                 };
-                                defer ally.free(msg.payload);
 
                                 std.debug.print("msg: {}\n", .{msg});
 
@@ -417,6 +416,9 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                         ),
                     }
 
+                    ally.free(ctx.peer_bf);
+                    ctx.peer_bf = &.{};
+
                     if (ctx.state == .ShuttingDown) {
                         ctx.state = .Off;
                         pending -= 1;
@@ -450,11 +452,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 }
 
 inline fn isKeepAliveMsg(bytes: []const u8) bool {
-    return (bytes.len >= 4 and
-        bytes[0] == 0 and
-        bytes[1] == 0 and
-        bytes[2] == 0 and
-        bytes[3] == 0);
+    return (bytes.len >= 4 and bytes[0] == 0 and bytes[1] == 0 and bytes[2] == 0 and bytes[3] == 0);
 }
 
 fn debugState(state: State) error{InvalidState}!void {
