@@ -7,13 +7,15 @@ const posix = std.posix;
 const linux = std.os.linux;
 const IoUring = linux.IoUring;
 
+const MAX_U32 = std.math.maxInt(u32);
+
 const BLOCK_SIZE = 16 * 1024;
 const MSG_BUF_SIZE = 512;
 const RECV_BUF_SIZE = BLOCK_SIZE + MSG_BUF_SIZE;
 
 const MAX_KEEPALIVES = 5;
 const TIMEOUT_MS: c_int = 2000;
-const N_CONNS: u16 = 8;
+const N_CONNS: u16 = 1;
 
 const UIntStack = utils.Stack(u32);
 
@@ -51,7 +53,8 @@ const Ctx = struct {
     peer: tcp.Peer,
     piece: Piece,
     peer_bf: []const u8,
-    buffer: []u8,
+    recv_buf: []u8,
+    piece_buf: []u8,
 
     const Info = struct {
         fd: i32,
@@ -60,6 +63,7 @@ const Ctx = struct {
         event: Event,
         state: State,
         peer: tcp.Peer,
+        piece: Piece,
     };
 
     fn info(self: Ctx) Info {
@@ -70,6 +74,7 @@ const Ctx = struct {
             .event = self.event,
             .state = self.state,
             .peer = self.peer,
+            .piece = self.piece,
         };
     }
 };
@@ -103,14 +108,17 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
     var clients: [N_CONNS]Ctx = undefined;
 
-    const buffers: []u8 = try ally.alloc(u8, @as(usize, @intCast(N_CONNS)) * RECV_BUF_SIZE);
+    const recv_buffers: []u8 = try ally.alloc(u8, @as(usize, @intCast(N_CONNS)) * RECV_BUF_SIZE);
     defer {
-        ally.free(buffers);
+        ally.free(recv_buffers);
         for (&clients) |*ctx| {
             ally.free(ctx.peer_bf);
             ctx.peer_bf = &.{};
         }
     }
+
+    const pieces_buffers: []u8 = try ally.alloc(u8, N_CONNS * ti.piece_length);
+    defer ally.free(pieces_buffers);
 
     const n_conns: u16 = for (0..N_CONNS) |i| {
         const peer: tcp.Peer = peers.next() orelse {
@@ -125,9 +133,10 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
             .event = .SOCKET,
             .state = .CreatingSocket,
             .peer = peer,
-            .piece = Piece{ .index = 0, .i = 0 },
+            .piece = Piece{ .index = MAX_U32, .i = MAX_U32 },
             .peer_bf = &.{},
-            .buffer = buffers[i .. i + RECV_BUF_SIZE],
+            .recv_buf = recv_buffers[i .. i + RECV_BUF_SIZE],
+            .piece_buf = pieces_buffers[i .. i + ti.piece_length],
         };
 
         _ = try ring.socket(
@@ -231,7 +240,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                 .SEND => switch (err) {
                     .SUCCESS => {
                         ctx.event = .RECV;
-                        _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
+                        _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.recv_buf }, 0);
                     },
 
                     else => {
@@ -249,7 +258,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                 .RECV => switch (err) {
                     .SUCCESS => recv: {
                         const n_read: usize = @intCast(cqe.res);
-                        const data: []const u8 = ctx.buffer[0..n_read];
+                        const data: []const u8 = ctx.recv_buf[0..n_read];
 
                         std.debug.print(
                             "Received {} bytes from fd {} @ {}: {any}.\n",
@@ -291,7 +300,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                             ctx.ka_cnt += 1;
 
                             ctx.event = .RECV;
-                            _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
+                            _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.recv_buf }, 0);
 
                             break :recv;
                         } else ctx.ka_cnt = 0;
@@ -391,7 +400,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                                     ctx.event = .RECV;
                                     ctx.state = .ExpectingUnChokeMsg;
-                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.buffer }, 0);
+                                    _ = try ring.recv(@intFromPtr(ctx), ctx.fd, .{ .buffer = ctx.recv_buf }, 0);
 
                                     break :recv;
                                 }
@@ -465,8 +474,77 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                             },
 
                             .Downloading => {
-                                ctx.state = .ClosingConnection;
-                                continue :state .ClosingConnection;
+                                const inMsg = tcp.Msg.decode(data) catch |e| switch (e) {
+                                    error.UnknownMsgId => {
+                                        std.debug.print("Message Id {} not recognized.\n", .{data[4]});
+
+                                        ctx.state = .ClosingConnection;
+                                        continue :state .ClosingConnection;
+                                    },
+
+                                    else => return e,
+                                };
+
+                                if (inMsg.id != .Piece) {
+                                    std.debug.print(
+                                        "Received unexpected msg id, expected: {}, received: {}",
+                                        .{ inMsg.id, tcp.MsgId.Piece },
+                                    );
+
+                                    ctx.state = .ClosingConnection;
+                                    continue :state .ClosingConnection;
+                                }
+
+                                const index: u32 = std.mem.readInt(u32, inMsg.payload[0..4], .big);
+                                if (ctx.piece.index != index) {
+                                    std.debug.print(
+                                        "Received wrong piece index, expected: {}, received: {}",
+                                        .{ ctx.piece.index, index },
+                                    );
+
+                                    ctx.state = .ClosingConnection;
+                                    continue :state .ClosingConnection;
+                                }
+
+                                const begin: u32 = std.mem.readInt(u32, inMsg.payload[4..8], .big);
+                                if (ctx.piece.i != begin) {
+                                    std.debug.print(
+                                        "Received wrong piece begin, expected: {}, received: {}",
+                                        .{ ctx.piece.i, begin },
+                                    );
+
+                                    ctx.state = .ClosingConnection;
+                                    continue :state .ClosingConnection;
+                                }
+
+                                const length: u32 = std.mem.readInt(u32, inMsg.payload[8..12], .big);
+                                @memcpy(ctx.piece_buf[begin .. begin + length], inMsg.payload[9..]);
+                                ctx.piece.i = begin + length;
+
+                                if (begin + length >= ti.piece_length) {
+                                    std.debug.print(
+                                        "Downloaded a whole piece!\nindex: {}, bytes:\n{any}\n",
+                                        .{ ctx.piece.index, ctx.piece_buf },
+                                    );
+
+                                    ctx.state = .ClosingConnection;
+                                    continue :state .ClosingConnection;
+                                }
+
+                                var payload: [12]u8 = undefined;
+                                const outMsg = tcp.Msg.request(index, begin + length, BLOCK_SIZE, &payload);
+                                var msg_bytes: [17]u8 = undefined;
+                                try outMsg.serialize(&msg_bytes);
+                                std.debug.print(
+                                    "Sending request msg to fd {} @ {}: {any}.\n",
+                                    .{ ctx.fd, ctx.peer, msg_bytes },
+                                );
+
+                                ctx.piece = Piece{ .index = begin + length, .i = 0 };
+                                ctx.event = .SEND;
+                                _ = try ring.send(@intFromPtr(ctx), ctx.fd, &msg_bytes, 0);
+
+                                break :recv;
                             },
 
                             .ClosingConnection => {
