@@ -1,6 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const tcp = @import("net/tcp.zig");
+const TorrentInfo = @import("bencode/data.zig").TorrentInfo;
 
 const posix = std.posix;
 const linux = std.os.linux;
@@ -12,7 +13,9 @@ const RECV_BUF_SIZE = BLOCK_SIZE + MSG_BUF_SIZE;
 
 const MAX_KEEPALIVES = 5;
 const TIMEOUT_MS: c_int = 2000;
-const N_CONNS: u16 = 1;
+const N_CONNS: u16 = 8;
+
+const UIntStack = utils.Stack(u32);
 
 const Event = enum {
     SOCKET,
@@ -34,6 +37,11 @@ const State = enum {
     ShuttingDown,
 };
 
+const Piece = struct {
+    index: u32,
+    i: u32,
+};
+
 const Ctx = struct {
     fd: i32,
     ka_cnt: u16,
@@ -41,6 +49,7 @@ const Ctx = struct {
     event: Event,
     state: State,
     peer: tcp.Peer,
+    piece: Piece,
     peer_bf: []const u8,
     buffer: []u8,
 
@@ -65,7 +74,16 @@ const Ctx = struct {
     }
 };
 
-pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers_bytes: []const u8) !void {
+pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers_bytes: []const u8, ti: TorrentInfo) !void {
+    const n_pieces: usize = ti.length / ti.piece_length;
+
+    const stack_items: []u32 = try ally.alloc(u32, n_pieces);
+    defer ally.free(stack_items);
+
+    var pieces: UIntStack = UIntStack.init(stack_items);
+
+    for (0..n_pieces) |i| try pieces.push(@intCast(n_pieces - i));
+
     const entries: u16 = try std.math.ceilPowerOfTwo(u16, 4 * N_CONNS);
 
     var ring: IoUring = try IoUring.init(entries, 0);
@@ -107,6 +125,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
             .event = .SOCKET,
             .state = .CreatingSocket,
             .peer = peer,
+            .piece = Piece{ .index = 0, .i = 0 },
             .peer_bf = &.{},
             .buffer = buffers[i .. i + RECV_BUF_SIZE],
         };
@@ -423,8 +442,13 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
                                 unchokes += 1;
 
+                                const piece_index: u32 = pieces.pop() orelse {
+                                    ctx.state = .ClosingConnection;
+                                    continue :state .ClosingConnection;
+                                };
+
                                 var payload: [12]u8 = undefined;
-                                const outMsg = tcp.Msg.request(0, 0, BLOCK_SIZE, &payload);
+                                const outMsg = tcp.Msg.request(piece_index, 0, BLOCK_SIZE, &payload);
                                 var msg_bytes: [17]u8 = undefined;
                                 try outMsg.serialize(&msg_bytes);
                                 std.debug.print(
@@ -432,6 +456,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                                     .{ ctx.fd, ctx.peer, msg_bytes },
                                 );
 
+                                ctx.piece = Piece{ .index = piece_index, .i = 0 };
                                 ctx.event = .SEND;
                                 ctx.state = .Downloading;
                                 _ = try ring.send(@intFromPtr(ctx), ctx.fd, &msg_bytes, 0);

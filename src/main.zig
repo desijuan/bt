@@ -97,7 +97,7 @@ pub fn main() !void {
 
     // Download from Peers
 
-    try loop.startDownloading(gpa, torrentFile.info_hash, trackerResponse.peers);
+    try loop.startDownloading(gpa, torrentFile.info_hash, trackerResponse.peers, torrentInfo);
 
     std.debug.print("\nAll done!\n", .{});
 }
