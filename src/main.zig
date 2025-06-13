@@ -1,19 +1,25 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const Parser = @import("bencode/Parser.zig");
-const bencode = @import("bencode/data.zig");
+
+const bp = @import("bp");
+const Parser = bp.Parser;
+
 const http = @import("net/http.zig");
 const loop = @import("loop.zig");
 
-const TorrentFile = bencode.TorrentFile;
-const TorrentInfo = bencode.TorrentInfo;
-const TrackerResponse = bencode.TrackerResponse;
+const data = @import("bp/data.zig");
+
+const TorrentFileInfo: type = data.TorrentFileInfo;
+const TorrentFile: type = bp.Dto(TorrentFileInfo);
+
+const TorrentInfo: type = data.TorrentInfo;
+const Torrent: type = bp.Dto(TorrentInfo);
 
 pub fn main() !void {
-    var gpa_inst = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
-    defer _ = gpa_inst.deinit();
+    var gpa_instance = std.heap.DebugAllocator(.{ .safety = true }){};
+    defer _ = gpa_instance.deinit();
 
-    const gpa = gpa_inst.allocator();
+    const gpa = gpa_instance.allocator();
 
     const file_buffer: []const u8 = try utils.readFile(
         gpa,
@@ -21,44 +27,42 @@ pub fn main() !void {
     );
     defer gpa.free(file_buffer);
 
-    // Parse Torrent File
-
     var hash: [20]u8 = undefined;
 
+    // Parse Torrent File
+
     var torrentFile = TorrentFile{
-        .creation_date = 0,
+        .@"creation date" = 0,
         .announce = &.{},
         .comment = &.{},
-        .created_by = &.{},
+        .@"created by" = &.{},
         .info = &.{},
-        .info_hash = &hash,
-        .url_list = &.{},
+        .@"url-list" = &.{},
     };
 
     var parser = Parser.init(file_buffer);
-    try parser.parseDict(TorrentFile, &torrentFile);
+    try parser.parseDict(TorrentFileInfo, &torrentFile);
 
-    std.crypto.hash.Sha1.hash(torrentFile.info, &hash, .{});
-
-    std.debug.print("\n Torrent File:\n", .{});
-    try torrentFile.print();
-
-    std.debug.print("\n", .{});
+    std.debug.print("#####", .{});
+    std.debug.print("\n\n Torrent File:\n", .{});
+    try data.printTorrentFile(torrentFile);
 
     // Parse Torrent Info
 
-    var torrentInfo = TorrentInfo{
+    var torrent = Torrent{
         .length = 0,
-        .piece_length = 0,
+        .@"piece length" = 0,
         .name = &.{},
         .pieces = &.{},
     };
 
     parser = Parser.init(torrentFile.info);
-    try parser.parseDict(TorrentInfo, &torrentInfo);
+    try parser.parseDict(TorrentInfo, &torrent);
 
-    std.debug.print("\n Torrent Info:\n", .{});
-    torrentInfo.print();
+    std.debug.print("\n\n Torrent Info:\n", .{});
+    data.printTorrent(torrent);
+
+    std.debug.print("\n#####\n", .{});
 
     std.debug.print("\n", .{});
 

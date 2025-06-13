@@ -16,6 +16,9 @@ pub fn build(b: *std.Build) void {
         .use_llvm = (optimize != .Debug),
     });
 
+    const bp = b.dependency("bp", .{});
+    exe_mod.addImport("bp", bp.module("bp"));
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
