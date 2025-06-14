@@ -33,9 +33,7 @@ pub fn printTorrentFile(torrentFile: TorrentFile) !void {
             std.debug.print("{s}:", .{field.name});
             try Parser.printList(torrentFile.@"url-list");
         } else std.debug.print("{s}: '{s}'\n", .{ field.name, @field(torrentFile, field.name) }),
-
         .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(torrentFile, field.name) }),
-
         else => unreachable,
     };
 }
@@ -47,9 +45,7 @@ pub fn printTorrent(torrent: Torrent) void {
             std.debug.print("{s}: {x} [..]\n", .{ field.name, torrent.pieces[0..20] })
         else
             std.debug.print("{s}: '{s}'\n", .{ field.name, @field(torrent, field.name) }),
-
         .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(torrent, field.name) }),
-
         else => unreachable,
     };
 }
@@ -58,9 +54,7 @@ const TrackerResponse: type = bp.Dto(TrackerResponseInfo);
 pub fn printTrackerResponse(self: TrackerResponse) void {
     inline for (@typeInfo(TrackerResponse).@"struct".fields) |field| switch (@typeInfo(field.type)) {
         .pointer => std.debug.print("{s}: {x} [..]\n", .{ field.name, @field(self, field.name)[0..20] }),
-
         .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
-
         else => unreachable,
     };
 }
