@@ -44,15 +44,16 @@ pub fn main() !void {
     var parser = Parser.init(file_buffer);
     try parser.parseDict(TorrentFileInfo, &torrentFile);
 
-    std.debug.print("#####", .{});
     std.debug.print("\n\n Torrent File:\n", .{});
     try data.printTorrentFile(torrentFile);
 
     var hash: [20]u8 = undefined;
     std.crypto.hash.Sha1.hash(torrentFile.info, &hash, .{});
-    std.debug.print("\n\nhash: {s}\n", .{&hash});
+    std.debug.print("\n\nhash: ", .{});
+    for (hash) |c| std.debug.print("{x:0>2}", .{c});
+    std.debug.print("'\n", .{});
 
-    // Parse Torrent Info
+    // Parse Torrent
 
     var torrent = Torrent{
         .length = 0,
@@ -66,8 +67,6 @@ pub fn main() !void {
 
     std.debug.print("\n\n Torrent Info:\n", .{});
     data.printTorrent(torrent);
-
-    std.debug.print("\n#####\n", .{});
 
     std.debug.print("\n", .{});
 
