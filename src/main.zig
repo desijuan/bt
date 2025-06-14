@@ -15,6 +15,9 @@ const TorrentFile: type = bp.Dto(TorrentFileInfo);
 const TorrentInfo: type = data.TorrentInfo;
 const Torrent: type = bp.Dto(TorrentInfo);
 
+const TrackerResponseInfo: type = data.TrackerResponseInfo;
+const TrackerResponse: type = bp.Dto(TrackerResponseInfo);
+
 pub fn main() !void {
     var gpa_instance = std.heap.DebugAllocator(.{ .safety = true }){};
     defer _ = gpa_instance.deinit();
@@ -26,8 +29,6 @@ pub fn main() !void {
         "debian-12.9.0-amd64-netinst.iso.torrent",
     );
     defer gpa.free(file_buffer);
-
-    var hash: [20]u8 = undefined;
 
     // Parse Torrent File
 
@@ -46,6 +47,10 @@ pub fn main() !void {
     std.debug.print("#####", .{});
     std.debug.print("\n\n Torrent File:\n", .{});
     try data.printTorrentFile(torrentFile);
+
+    var hash: [20]u8 = undefined;
+    std.crypto.hash.Sha1.hash(torrentFile.info, &hash, .{});
+    std.debug.print("\n\nhash: {s}\n", .{&hash});
 
     // Parse Torrent Info
 
@@ -66,9 +71,9 @@ pub fn main() !void {
 
     std.debug.print("\n", .{});
 
-    if (torrentInfo.length % torrentInfo.piece_length != 0) return error.MalfornedPiecesInfo;
-    if (torrentInfo.pieces.len % 20 != 0) return error.MalfornedPieces;
-    if (torrentInfo.length / torrentInfo.piece_length != torrentInfo.pieces.len / 20)
+    if (torrent.length % torrent.@"piece length" != 0) return error.MalfornedPiecesInfo;
+    if (torrent.pieces.len % 20 != 0) return error.MalfornedPieces;
+    if (torrent.length / torrent.@"piece length" != torrent.pieces.len / 20)
         return error.MalfornedPieces;
 
     // Request Peers
@@ -78,12 +83,12 @@ pub fn main() !void {
     const body = try http.requestPeers(gpa, .{
         .announce = torrentFile.announce,
         .peer_id = peer_id,
-        .info_hash = torrentFile.info_hash,
+        .info_hash = &hash,
         .port = 6882,
         .uploaded = 0,
         .downloaded = 0,
         .compact = 1,
-        .left = torrentInfo.length,
+        .left = torrent.length,
     });
     defer gpa.free(body);
 
@@ -93,15 +98,15 @@ pub fn main() !void {
     };
 
     parser = Parser.init(body);
-    try parser.parseDict(TrackerResponse, &trackerResponse);
+    try parser.parseDict(TrackerResponseInfo, &trackerResponse);
 
-    trackerResponse.print();
+    data.printTrackerResponse(trackerResponse);
 
     std.debug.print("\n", .{});
 
     // Download from Peers
 
-    try loop.startDownloading(gpa, torrentFile.info_hash, trackerResponse.peers, torrentInfo);
+    try loop.startDownloading(gpa, &hash, trackerResponse.peers, torrent);
 
     std.debug.print("\nAll done!\n", .{});
 }

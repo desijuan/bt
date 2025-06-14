@@ -1,7 +1,9 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const tcp = @import("net/tcp.zig");
-const TorrentInfo = @import("bencode/data.zig").TorrentInfo;
+
+const TorrentInfo: type = @import("bp/data.zig").TorrentInfo;
+const Torrent: type = @import("bp").Dto(TorrentInfo);
 
 const posix = std.posix;
 const linux = std.os.linux;
@@ -79,8 +81,8 @@ const Ctx = struct {
     }
 };
 
-pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers_bytes: []const u8, ti: TorrentInfo) !void {
-    const n_pieces: usize = ti.length / ti.piece_length;
+pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers_bytes: []const u8, torrent: Torrent) !void {
+    const n_pieces: usize = torrent.length / torrent.@"piece length";
 
     const stack_items: []u32 = try ally.alloc(u32, n_pieces);
     defer ally.free(stack_items);
@@ -117,7 +119,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
         }
     }
 
-    const pieces_buffers: []u8 = try ally.alloc(u8, N_CONNS * ti.piece_length);
+    const pieces_buffers: []u8 = try ally.alloc(u8, N_CONNS * torrent.@"piece length");
     defer ally.free(pieces_buffers);
 
     const n_conns: u16 = for (0..N_CONNS) |i| {
@@ -136,7 +138,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
             .piece = Piece{ .index = MAX_U32, .i = MAX_U32 },
             .peer_bf = &.{},
             .recv_buf = recv_buffers[i .. i + RECV_BUF_SIZE],
-            .piece_buf = pieces_buffers[i .. i + ti.piece_length],
+            .piece_buf = pieces_buffers[i .. i + torrent.@"piece length"],
         };
 
         _ = try ring.socket(
@@ -521,7 +523,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                                 @memcpy(ctx.piece_buf[begin .. begin + length], inMsg.payload[9..]);
                                 ctx.piece.i = begin + length;
 
-                                if (begin + length >= ti.piece_length) {
+                                if (begin + length >= torrent.@"piece length") {
                                     std.debug.print(
                                         "Downloaded a whole piece!\nindex: {}, bytes:\n{any}\n",
                                         .{ ctx.piece.index, ctx.piece_buf },

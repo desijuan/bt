@@ -17,6 +17,11 @@ pub const TorrentInfo = struct {
     pieces: bp.String,
 };
 
+pub const TrackerResponseInfo = struct {
+    interval: bp.Int,
+    peers: bp.String,
+};
+
 const Parser = bp.Parser;
 
 const TorrentFile: type = bp.Dto(TorrentFileInfo);
@@ -44,6 +49,17 @@ pub fn printTorrent(torrent: Torrent) void {
             std.debug.print("{s}: '{s}'\n", .{ field.name, @field(torrent, field.name) }),
 
         .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(torrent, field.name) }),
+
+        else => unreachable,
+    };
+}
+
+const TrackerResponse: type = bp.Dto(TrackerResponseInfo);
+pub fn printTrackerResponse(self: TrackerResponse) void {
+    inline for (@typeInfo(TrackerResponse).@"struct".fields) |field| switch (@typeInfo(field.type)) {
+        .pointer => std.debug.print("{s}: {x} [..]\n", .{ field.name, @field(self, field.name)[0..20] }),
+
+        .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(self, field.name) }),
 
         else => unreachable,
     };
