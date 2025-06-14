@@ -81,11 +81,16 @@ const Ctx = struct {
     }
 };
 
-pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers_bytes: []const u8, torrent: Torrent) !void {
+pub fn startDownloading(
+    gpa: std.mem.Allocator,
+    info_hash: *const [20]u8,
+    peers_bytes: []const u8,
+    torrent: Torrent,
+) !void {
     const n_pieces: usize = torrent.length / torrent.@"piece length";
 
-    const stack_items: []u32 = try ally.alloc(u32, n_pieces);
-    defer ally.free(stack_items);
+    const stack_items: []u32 = try gpa.alloc(u32, n_pieces);
+    defer gpa.free(stack_items);
 
     var pieces: UIntStack = UIntStack.init(stack_items);
 
@@ -101,8 +106,8 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
         .peer_id = &utils.range(1, 21),
     };
 
-    const handshake: []const u8 = try hs.serialize(ally);
-    defer ally.free(handshake);
+    const handshake: []const u8 = try hs.serialize(gpa);
+    defer gpa.free(handshake);
 
     std.debug.print("handshake: {any}\n\n", .{handshake});
 
@@ -110,21 +115,24 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
 
     var clients: [N_CONNS]Ctx = undefined;
 
-    const recv_buffers: []u8 = try ally.alloc(u8, @as(usize, @intCast(N_CONNS)) * RECV_BUF_SIZE);
+    const recv_buffers: []u8 = try gpa.alloc(u8, @as(usize, @intCast(N_CONNS)) * RECV_BUF_SIZE);
     defer {
-        ally.free(recv_buffers);
+        gpa.free(recv_buffers);
         for (&clients) |*ctx| {
-            ally.free(ctx.peer_bf);
+            gpa.free(ctx.peer_bf);
             ctx.peer_bf = &.{};
         }
     }
 
-    const pieces_buffers: []u8 = try ally.alloc(u8, N_CONNS * torrent.@"piece length");
-    defer ally.free(pieces_buffers);
+    const pieces_buffers: []u8 = try gpa.alloc(u8, N_CONNS * torrent.@"piece length");
+    defer gpa.free(pieces_buffers);
 
     const n_conns: u16 = for (0..N_CONNS) |i| {
         const peer: tcp.Peer = peers.next() orelse {
-            std.debug.print("Total number of peers reached. Starting {} connections.\n", .{i});
+            std.debug.print(
+                "Total number of peers reached. Starting {} connections.\n",
+                .{i},
+            );
             break @intCast(i);
         };
 
@@ -386,7 +394,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                                 std.debug.print("msg: {}\n", .{msg});
 
                                 if (msg.id == .Bitfield) {
-                                    const bitfield: []u8 = try ally.alloc(u8, msg.payload.len);
+                                    const bitfield: []u8 = try gpa.alloc(u8, msg.payload.len);
                                     @memcpy(bitfield, msg.payload);
                                     ctx.peer_bf = bitfield;
                                 }
@@ -590,7 +598,7 @@ pub fn startDownloading(ally: std.mem.Allocator, info_hash: *const [20]u8, peers
                         ),
                     }
 
-                    ally.free(ctx.peer_bf);
+                    gpa.free(ctx.peer_bf);
                     ctx.peer_bf = &.{};
 
                     if (ctx.state == .ShuttingDown) {
@@ -633,17 +641,6 @@ inline fn isKeepAliveMsg(bytes: []const u8) bool {
 fn debugState(state: State) error{InvalidState}!void {
     std.debug.print("Invalid State: {s}\n", .{@tagName(state)});
     return error.InvalidState;
-}
-
-fn printInfo(T: type) void {
-    std.debug.print("{s} size: {}, align: {}\n", .{ @typeName(T), @sizeOf(T), @alignOf(T) });
-}
-
-test "prueba" {
-    printInfo(Event);
-    printInfo(State);
-    printInfo(tcp.Peer);
-    printInfo(Ctx);
 }
 
 fn peerHasPiece(bitfield: []const u8, index: u32) bool {

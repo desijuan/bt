@@ -32,16 +32,8 @@ pub fn main() !void {
 
     // Parse Torrent File
 
-    var torrentFile = TorrentFile{
-        .@"creation date" = 0,
-        .announce = &.{},
-        .comment = &.{},
-        .@"created by" = &.{},
-        .info = &.{},
-        .@"url-list" = &.{},
-    };
-
     var parser = Parser.init(file_buffer);
+    var torrentFile: TorrentFile = undefined;
     try parser.parseDict(TorrentFileInfo, &torrentFile);
 
     std.debug.print("\n\n Torrent File:\n", .{});
@@ -55,14 +47,8 @@ pub fn main() !void {
 
     // Parse Torrent
 
-    var torrent = Torrent{
-        .length = 0,
-        .@"piece length" = 0,
-        .name = &.{},
-        .pieces = &.{},
-    };
-
     parser = Parser.init(torrentFile.info);
+    var torrent: Torrent = undefined;
     try parser.parseDict(TorrentInfo, &torrent);
 
     std.debug.print("\n\n Torrent Info:\n", .{});
@@ -91,12 +77,8 @@ pub fn main() !void {
     });
     defer gpa.free(body);
 
-    var trackerResponse = TrackerResponse{
-        .interval = 0,
-        .peers = &.{},
-    };
-
     parser = Parser.init(body);
+    var trackerResponse: TrackerResponse = undefined;
     try parser.parseDict(TrackerResponseInfo, &trackerResponse);
 
     data.printTrackerResponse(trackerResponse);
