@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.14.1",
     .dependencies = .{
         .bp = .{
-            .url = "git+https://github.com/desijuan/bp?ref=master#e1a37bcedbb68d7b5a6639994a11d0607ed35750",
-            .hash = "bp-0.0.1-l8zxCnsXAAC-2hd29lHZ40w-QsgsLvUiW80SeleCk2pE",
+            .url = "git+https://github.com/desijuan/bp?ref=master#e25f396a07065dc4fb8d81031b188f41b2696651",
+            .hash = "bp-0.0.1-l8zxCocXAADLAY3K7nMd9WPYHhD2SnBYM4BNBuSqmSSh",
         },
     },
     .paths = .{
