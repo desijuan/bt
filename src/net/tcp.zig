@@ -10,13 +10,9 @@ pub const Peer = struct {
 
     pub fn format(
         self: Peer,
-        comptime fmt: []const u8,
-        _: std.fmt.FormatOptions,
-        out_stream: anytype,
-    ) !void {
-        if (fmt.len != 0) std.fmt.invalidFmtError(fmt, self);
-        try std.fmt.format(
-            out_stream,
+        writer: *std.io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.print(
             "{}.{}.{}.{}:{}",
             .{ self.ip[0], self.ip[1], self.ip[2], self.ip[3], self.port },
         );

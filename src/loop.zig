@@ -130,7 +130,7 @@ pub fn startDownloading(
     const n_conns: u16 = for (0..N_CONNS) |i| {
         const peer: tcp.Peer = peers.next() orelse {
             std.debug.print(
-                "Total number of peers reached. Starting {} connections.\n",
+                "Total number of peers reached. Starting {d} connections.\n",
                 .{i},
             );
             break @intCast(i);
@@ -177,7 +177,7 @@ pub fn startDownloading(
                         const fd: i32 = cqe.res;
                         ctx.fd = fd;
 
-                        std.debug.print("Connecting fd {} @ {}\n", .{ fd, ctx.peer });
+                        std.debug.print("Connecting fd {d} @ {f}\n", .{ fd, ctx.peer });
 
                         try posix.setsockopt(
                             fd,
@@ -201,7 +201,7 @@ pub fn startDownloading(
 
                 .CONNECT => switch (err) {
                     .SUCCESS => {
-                        std.debug.print("Connected to fd {} @ {}, sending handshake...\n", .{ ctx.fd, ctx.peer });
+                        std.debug.print("Connected to fd {d} @ {f}, sending handshake...\n", .{ ctx.fd, ctx.peer });
 
                         ctx.event = .SEND;
                         ctx.state = .ExpectingHandshake;
@@ -210,7 +210,7 @@ pub fn startDownloading(
 
                     .CONNREFUSED, .TIMEDOUT, .HOSTUNREACH => blk: {
                         std.debug.print(
-                            "Connection with fd {} @ {} returned error {s}.\n",
+                            "Connection with fd {d} @ {f} returned error {s}.\n",
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
@@ -224,7 +224,7 @@ pub fn startDownloading(
                         ctx.peer = peer;
 
                         std.debug.print(
-                            "Attempting another peer: fd {} @ {}...\n",
+                            "Attempting another peer:  fd {d} @ {f}...\n",
                             .{ ctx.fd, peer },
                         );
 
@@ -237,7 +237,7 @@ pub fn startDownloading(
 
                     else => {
                         std.debug.print(
-                            "Connection with fd {} @ {} returned error {s}. Closing fd {[0]}.\n",
+                            "Connection with  fd {d} @ {f} returned error {s}. Closing fd {[0]}.\n",
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
@@ -255,7 +255,7 @@ pub fn startDownloading(
 
                     else => {
                         std.debug.print(
-                            "Send to fd {} @ {} returned error {s}.\n",
+                            "Send to  fd {d} @ {f} returned error {s}.\n",
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
@@ -271,13 +271,13 @@ pub fn startDownloading(
                         const data: []const u8 = ctx.recv_buf[0..n_read];
 
                         std.debug.print(
-                            "Received {} bytes from fd {} @ {}: {any}.\n",
+                            "Received {} bytes from  fd {d} @ {f}: {any}.\n",
                             .{ n_read, ctx.fd, ctx.peer, data },
                         );
 
                         if (data.len < 4) {
                             std.debug.print(
-                                "Didn't receive enough bytes. Closing fd {} @ {}.\n",
+                                "Didn't receive enough bytes. Closing  fd {d} @ {f}.\n",
                                 .{ ctx.fd, ctx.peer },
                             );
 
@@ -291,7 +291,7 @@ pub fn startDownloading(
                         if (isKeepAliveMsg(data)) {
                             if (ctx.ka_cnt >= MAX_KEEPALIVES) {
                                 std.debug.print(
-                                    "Received too many keep-alive msgs from fd {} @ {}. Closing connection.\n",
+                                    "Received too many keep-alive msgs from  fd {d} @ {f}. Closing connection.\n",
                                     .{ ctx.fd, ctx.peer },
                                 );
 
@@ -303,7 +303,7 @@ pub fn startDownloading(
                             }
 
                             std.debug.print(
-                                "Received keep-alive msg from fd {} @ {}. Waiting for more bytes...\n",
+                                "Received keep-alive msg from  fd {d} @ {f}. Waiting for more bytes...\n",
                                 .{ ctx.fd, ctx.peer },
                             );
 
@@ -339,7 +339,7 @@ pub fn startDownloading(
                                     var msg_bytes: [msg.len()]u8 = undefined;
                                     try msg.serialize(&msg_bytes);
                                     std.debug.print(
-                                        "Sending interested msg to fd {} @ {}: {any}.\n",
+                                        "Sending interested msg to  fd {d} @ {f}: {any}.\n",
                                         .{ ctx.fd, ctx.peer, msg_bytes },
                                     );
 
@@ -352,7 +352,7 @@ pub fn startDownloading(
 
                                 if (bytes.len < 4) {
                                     std.debug.print(
-                                        "Didn't understand: {any}.\nClosing fd {} @ {}.\nctx: {any}\n",
+                                        "Didn't understand: {any}.\nClosing  fd {d} @ {f}.\nctx: {any}\n",
                                         .{ bytes, ctx.fd, ctx.peer, ctx.info() },
                                     );
 
@@ -369,7 +369,7 @@ pub fn startDownloading(
 
                                 if (bytes.len < msg_length + 4) {
                                     std.debug.print(
-                                        "Didn't understand: {any}.\nClosing fd {} @ {}.\nctx: {any}\n",
+                                        "Didn't understand: {any}.\nClosing  fd {d} @ {f}.\nctx: {any}\n",
                                         .{ bytes, ctx.fd, ctx.peer, ctx.info() },
                                     );
 
@@ -404,7 +404,7 @@ pub fn startDownloading(
 
                                 if (bytes.len <= 0) {
                                     std.debug.print(
-                                        "No more bytes left. Waiting for unchoke msg from fd {} @ {}...\n",
+                                        "No more bytes left. Waiting for unchoke msg from  fd {d} @ {f}...\n",
                                         .{ ctx.fd, ctx.peer },
                                     );
 
@@ -417,7 +417,7 @@ pub fn startDownloading(
 
                                 if (bytes.len < 4) {
                                     std.debug.print(
-                                        "Didn't understand: {any}\n. Closing fd {} @ {}.\n",
+                                        "Didn't understand: {any}\n. Closing  fd {d} @ {f}.\n",
                                         .{ bytes, ctx.fd, ctx.peer },
                                     );
 
@@ -445,7 +445,7 @@ pub fn startDownloading(
 
                                 if (inMsg.id != .Unchoke) {
                                     std.debug.print(
-                                        "Hmm, was expecting an unchoke msg from {} @ {}." ++
+                                        "Hmm, was expecting an unchoke msg from {} @ {f}." ++
                                             " Received instead: {}. Closing the connection.\n",
                                         .{ ctx.fd, ctx.peer, inMsg },
                                     );
@@ -455,7 +455,7 @@ pub fn startDownloading(
                                 }
 
                                 std.debug.print(
-                                    "Received unchoke msg from fd {} @ {}.\n",
+                                    "Received unchoke msg from  fd {d} @ {f}.\n",
                                     .{ ctx.fd, ctx.peer },
                                 );
 
@@ -471,7 +471,7 @@ pub fn startDownloading(
                                 var msg_bytes: [17]u8 = undefined;
                                 try outMsg.serialize(&msg_bytes);
                                 std.debug.print(
-                                    "Sending request msg to fd {} @ {}: {any}.\n",
+                                    "Sending request msg to  fd {d} @ {f}: {any}.\n",
                                     .{ ctx.fd, ctx.peer, msg_bytes },
                                 );
 
@@ -546,7 +546,7 @@ pub fn startDownloading(
                                 var msg_bytes: [17]u8 = undefined;
                                 try outMsg.serialize(&msg_bytes);
                                 std.debug.print(
-                                    "Sending request msg to fd {} @ {}: {any}.\n",
+                                    "Sending request msg to  fd {d} @ {f}: {any}.\n",
                                     .{ ctx.fd, ctx.peer, msg_bytes },
                                 );
 
@@ -559,7 +559,7 @@ pub fn startDownloading(
 
                             .ClosingConnection => {
                                 std.debug.print(
-                                    "Closing fd {} @ {}.\n",
+                                    "Closing  fd {d} @ {f}.\n",
                                     .{ ctx.fd, ctx.peer },
                                 );
 
@@ -575,7 +575,7 @@ pub fn startDownloading(
 
                     else => {
                         std.debug.print(
-                            "Recv from fd {} @ {} returned error {s}. Closing the connection.\n",
+                            "Recv from  fd {d} @ {f} returned error {s}. Closing the connection.\n",
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
@@ -588,12 +588,12 @@ pub fn startDownloading(
                 .CLOSE => close: {
                     switch (err) {
                         .SUCCESS => std.debug.print(
-                            "Closed fd {} @ {}.\n",
+                            "Closed  fd {d} @ {f}.\n",
                             .{ ctx.fd, ctx.peer },
                         ),
 
                         else => std.debug.print(
-                            "Close fd {} @ {} returned error {s}.\n",
+                            "Close  fd {d} @ {f} returned error {s}.\n",
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         ),
                     }

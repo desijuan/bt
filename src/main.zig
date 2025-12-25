@@ -2,7 +2,6 @@ const std = @import("std");
 const utils = @import("utils.zig");
 
 const bp = @import("bp");
-const Parser = bp.Parser;
 
 const http = @import("net/http.zig");
 const loop = @import("loop.zig");
@@ -24,15 +23,16 @@ pub fn main() !void {
 
     const gpa = gpa_instance.allocator();
 
-    const file_buffer: []const u8 = try utils.readFile(
+    const file_buffer: []const u8 = try std.fs.cwd().readFileAlloc(
         gpa,
         "debian-12.9.0-amd64-netinst.iso.torrent",
+        std.math.maxInt(usize),
     );
     defer gpa.free(file_buffer);
 
     // Parse Torrent File
 
-    var parser = Parser.init(file_buffer);
+    var parser = bp.Parser.init(file_buffer);
     var torrentFile: TorrentFile = undefined;
     try parser.parseDict(TorrentFileInfo, &torrentFile);
 
@@ -47,7 +47,7 @@ pub fn main() !void {
 
     // Parse Torrent
 
-    parser = Parser.init(torrentFile.info);
+    parser = bp.Parser.init(torrentFile.info);
     var torrent: Torrent = undefined;
     try parser.parseDict(TorrentInfo, &torrent);
 
@@ -77,7 +77,7 @@ pub fn main() !void {
     });
     defer gpa.free(body);
 
-    parser = Parser.init(body);
+    parser = bp.Parser.init(body);
     var trackerResponse: TrackerResponse = undefined;
     try parser.parseDict(TrackerResponseInfo, &trackerResponse);
 
@@ -92,7 +92,7 @@ pub fn main() !void {
     std.debug.print("\nAll done!\n", .{});
 }
 
-comptime {
+comptime { // Tests
     _ = @import("utils.zig");
     _ = @import("net/tcp.zig");
 }

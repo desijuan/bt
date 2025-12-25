@@ -22,8 +22,6 @@ pub const TrackerResponseInfo = struct {
     peers: bp.String,
 };
 
-const Parser = bp.Parser;
-
 const TorrentFile: type = bp.Dto(TorrentFileInfo);
 pub fn printTorrentFile(torrentFile: TorrentFile) !void {
     inline for (@typeInfo(TorrentFile).@"struct".fields) |field| switch (@typeInfo(field.type)) {
@@ -31,7 +29,7 @@ pub fn printTorrentFile(torrentFile: TorrentFile) !void {
             std.debug.print("{s}: {s} [..]\n", .{ field.name, torrentFile.info[0..90] })
         else if (comptime std.mem.eql(u8, "url-list", field.name)) {
             std.debug.print("{s}:", .{field.name});
-            try Parser.printList(torrentFile.@"url-list");
+            try bp.Parser.printList(torrentFile.@"url-list");
         } else std.debug.print("{s}: '{s}'\n", .{ field.name, @field(torrentFile, field.name) }),
         .int => std.debug.print("{s}: {d}\n", .{ field.name, @field(torrentFile, field.name) }),
         else => unreachable,

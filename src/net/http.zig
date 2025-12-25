@@ -27,25 +27,21 @@ pub fn requestPeers(allocator: std.mem.Allocator, url: Url) ![]const u8 {
     defer allocator.free(uri_str);
 
     const uri: std.Uri = try std.Uri.parse(uri_str);
-    var buf: [4 * 1024]u8 = undefined;
 
-    var req: http.Client.Request = try client.open(.GET, uri, .{
-        .server_header_buffer = &buf,
-    });
+    var req: http.Client.Request = try client.request(.GET, uri, .{});
     defer req.deinit();
 
-    try req.send();
-    try req.finish();
-    try req.wait();
+    try req.sendBodiless();
 
-    const res_status: http.Status = req.response.status;
-    if (res_status != .ok) {
-        std.log.err("Got response status \"{?s}\"", .{res_status.phrase()});
+    var redirect_buffer: [1024]u8 = undefined;
+    var response: http.Client.Response = try req.receiveHead(&redirect_buffer);
+    if (response.head.status != .ok) {
+        std.log.err("Got response status \"{?s}\"", .{response.head.status.phrase()});
         return error.ResponseStatusNotOk;
     }
 
-    var iter: http.HeaderIterator = req.response.iterateHeaders();
-    const content_length: usize = while (iter.next()) |header| {
+    var headerIterator: http.HeaderIterator = response.head.iterateHeaders();
+    const content_length: usize = while (headerIterator.next()) |header| {
         if (std.mem.eql(u8, CONTENT_LENGTH_HEADER, header.name))
             break try std.fmt.parseInt(usize, header.value, 10);
     } else {
@@ -53,11 +49,11 @@ pub fn requestPeers(allocator: std.mem.Allocator, url: Url) ![]const u8 {
         return error.NoContentLength;
     };
 
-    const body: []u8 = try allocator.alloc(u8, content_length);
-    errdefer allocator.free(body);
+    const buffer: []u8 = try allocator.alloc(u8, content_length);
+    errdefer allocator.free(buffer);
 
-    const nread: usize = try req.readAll(body);
-    if (nread != content_length) return error.ReadError;
+    const body = try response.reader(buffer).allocRemaining(allocator, .unlimited);
+    errdefer allocator.free(body);
 
     return body;
 }
