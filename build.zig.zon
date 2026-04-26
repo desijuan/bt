@@ -2,11 +2,11 @@
     .name = .bt,
     .version = "0.0.1",
     .fingerprint = 0x417aaeffacdc0383, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .bp = .{
-            .url = "git+https://github.com/desijuan/bp?ref=master#059ab650c277edafb2e6cfa2df014de3650c7531",
-            .hash = "bp-0.0.1-l8zxClUYAABl7nx9bbl_m1P6zIsWbjLBdg23RZGmdNsS",
+            .url = "git+https://github.com/desijuan/bp#23b35f5a71369863e5103a93e662ecb6ea4e4122",
+            .hash = "bp-0.0.1-l8zxCqQYAAAodSb9uj4kkc-1GMeADmrOKcWziL2RTld_",
         },
     },
     .paths = .{

@@ -10,6 +10,6 @@ test:
 	zig build test --summary all
 
 clean:
-	rm -rf .zig-cache zig-out
+	rm -rf .zig-cache zig-out zig-pkg
 
 .PHONY: build run clean

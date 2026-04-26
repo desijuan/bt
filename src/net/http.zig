@@ -14,8 +14,8 @@ const Url = struct {
     left: u32,
 };
 
-pub fn requestPeers(allocator: std.mem.Allocator, url: Url) ![]const u8 {
-    var client = http.Client{ .allocator = allocator };
+pub fn requestPeers(allocator: std.mem.Allocator, io: std.Io, url: Url) ![]const u8 {
+    var client = http.Client{ .allocator = allocator, .io = io };
     defer client.deinit();
 
     const uri_str: []const u8 = try std.fmt.allocPrint(

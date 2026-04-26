@@ -1,23 +1,16 @@
 const std = @import("std");
 
-pub const Peer = struct {
-    ip: [4]u8,
-    port: u16,
+const Ip4Address = std.Io.net.Ip4Address;
+const posix = std.posix;
 
-    pub fn address(self: Peer) std.net.Address {
-        return std.net.Address.initIp4(self.ip, self.port);
-    }
-
-    pub fn format(
-        self: Peer,
-        writer: *std.io.Writer,
-    ) std.Io.Writer.Error!void {
-        try writer.print(
-            "{}.{}.{}.{}:{}",
-            .{ self.ip[0], self.ip[1], self.ip[2], self.ip[3], self.port },
-        );
-    }
-};
+pub fn toSockAddr(ip4Address: Ip4Address) posix.sockaddr.in {
+    return std.posix.sockaddr.in{
+        .family = std.posix.AF.INET,
+        .port = std.mem.nativeToBig(u16, ip4Address.port),
+        .addr = @bitCast(ip4Address.bytes),
+        .zero = [_]u8{0} ** 8,
+    };
+}
 
 pub const PeersIterator = struct {
     peers: []const u8,
@@ -32,15 +25,15 @@ pub const PeersIterator = struct {
         };
     }
 
-    pub fn next(self: *PeersIterator) ?Peer {
+    pub fn next(self: *PeersIterator) ?Ip4Address {
         const i = self.n * 6;
 
         if (i >= self.peers.len) return null;
 
         self.n += 1;
 
-        return Peer{
-            .ip = self.peers[i .. i + 4][0..4].*,
+        return Ip4Address{
+            .bytes = self.peers[i .. i + 4][0..4].*,
             .port = (@as(u16, self.peers[i + 4]) << 8) | @as(u16, self.peers[i + 5]),
         };
     }

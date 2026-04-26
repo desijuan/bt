@@ -52,7 +52,7 @@ const Ctx = struct {
     err: linux.E,
     event: Event,
     state: State,
-    peer: tcp.Peer,
+    peer: std.Io.net.Ip4Address,
     piece: Piece,
     peer_bf: []const u8,
     recv_buf: []u8,
@@ -64,7 +64,7 @@ const Ctx = struct {
         err: linux.E,
         event: Event,
         state: State,
-        peer: tcp.Peer,
+        peer: std.Io.net.Ip4Address,
         piece: Piece,
     };
 
@@ -87,7 +87,10 @@ pub fn startDownloading(
     peers_bytes: []const u8,
     torrent: Torrent,
 ) !void {
-    const n_pieces: usize = torrent.length / torrent.@"piece length";
+    const torrent_length: u32 = @intCast(torrent.length);
+    const piece_length: u32 = @intCast(torrent.@"piece length");
+
+    const n_pieces: usize = torrent_length / piece_length;
 
     const stack_items: []u32 = try gpa.alloc(u32, n_pieces);
     defer gpa.free(stack_items);
@@ -124,11 +127,11 @@ pub fn startDownloading(
         }
     }
 
-    const pieces_buffers: []u8 = try gpa.alloc(u8, N_CONNS * torrent.@"piece length");
+    const pieces_buffers: []u8 = try gpa.alloc(u8, N_CONNS * piece_length);
     defer gpa.free(pieces_buffers);
 
     const n_conns: u16 = for (0..N_CONNS) |i| {
-        const peer: tcp.Peer = peers.next() orelse {
+        const peer: std.Io.net.Ip4Address = peers.next() orelse {
             std.debug.print(
                 "Total number of peers reached. Starting {d} connections.\n",
                 .{i},
@@ -146,7 +149,7 @@ pub fn startDownloading(
             .piece = Piece{ .index = MAX_U32, .i = MAX_U32 },
             .peer_bf = &.{},
             .recv_buf = recv_buffers[i .. i + RECV_BUF_SIZE],
-            .piece_buf = pieces_buffers[i .. i + torrent.@"piece length"],
+            .piece_buf = pieces_buffers[i .. i + piece_length],
         };
 
         _ = try ring.socket(
@@ -186,11 +189,11 @@ pub fn startDownloading(
                             std.mem.asBytes(&TIMEOUT_MS),
                         );
 
-                        const addr: std.net.Address = ctx.peer.address();
+                        const addr_in: std.posix.sockaddr.in = tcp.toSockAddr(ctx.peer);
 
                         ctx.event = .CONNECT;
                         ctx.state = .ConnectingToPeer;
-                        _ = try ring.connect(@intFromPtr(ctx), fd, &addr.any, addr.getOsSockLen());
+                        _ = try ring.connect(@intFromPtr(ctx), fd, @ptrCast(&addr_in), @sizeOf(@TypeOf(addr_in)));
                     },
 
                     else => {
@@ -214,7 +217,7 @@ pub fn startDownloading(
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
-                        const peer: tcp.Peer = peers.next() orelse {
+                        const peer: std.Io.net.Ip4Address = peers.next() orelse {
                             ctx.event = .CLOSE;
                             ctx.state = .ShuttingDown;
                             _ = try ring.close(@intFromPtr(ctx), ctx.fd);
@@ -228,11 +231,11 @@ pub fn startDownloading(
                             .{ ctx.fd, peer },
                         );
 
-                        const addr: std.net.Address = peer.address();
+                        const addr_in: std.posix.sockaddr.in = tcp.toSockAddr(ctx.peer);
 
                         ctx.event = .CONNECT;
                         ctx.state = .ConnectingToPeer;
-                        _ = try ring.connect(@intFromPtr(ctx), ctx.fd, &addr.any, addr.getOsSockLen());
+                        _ = try ring.connect(@intFromPtr(ctx), ctx.fd, @ptrCast(&addr_in), @sizeOf(@TypeOf(addr_in)));
                     },
 
                     else => {
@@ -531,7 +534,7 @@ pub fn startDownloading(
                                 @memcpy(ctx.piece_buf[begin .. begin + length], inMsg.payload[9..]);
                                 ctx.piece.i = begin + length;
 
-                                if (begin + length >= torrent.@"piece length") {
+                                if (begin + length >= piece_length) {
                                     std.debug.print(
                                         "Downloaded a whole piece!\nindex: {}, bytes:\n{any}\n",
                                         .{ ctx.piece.index, ctx.piece_buf },
@@ -607,7 +610,7 @@ pub fn startDownloading(
                         break :close;
                     }
 
-                    const peer: tcp.Peer = peers.next() orelse {
+                    const peer: std.Io.net.Ip4Address = peers.next() orelse {
                         ctx.state = .Off;
                         pending -= 1;
                         break :close;
