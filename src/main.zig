@@ -4,7 +4,7 @@ const utils = @import("utils.zig");
 const bp = @import("bp");
 
 const http = @import("net/http.zig");
-const loop = @import("loop.zig");
+const fsm = @import("fsm.zig");
 
 const data = @import("bp/data.zig");
 
@@ -87,7 +87,14 @@ pub fn main(init: std.process.Init) !void {
 
     // Download from Peers
 
-    try loop.startDownloading(gpa, &hash, trackerResponse.peers, torrent);
+    const torrentino = fsm.Torrent{
+        .length = torrent_length,
+        .piece_length = piece_length,
+        .name = torrent.name,
+        .pieces = torrent.pieces,
+    };
+
+    try fsm.startDownloading(gpa, torrentino, &hash, trackerResponse.peers);
 
     std.debug.print("\nAll done!\n", .{});
 }
