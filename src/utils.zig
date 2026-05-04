@@ -4,7 +4,7 @@ const testing = std.testing;
 pub inline fn range(comptime start: comptime_int, comptime end: comptime_int) [end - start]u8 {
     comptime {
         if (start >= end) {
-            @compileError("start must be strictly less than end");
+            @compileError("Start must be strictly less than end");
         }
 
         var array: [end - start]u8 = undefined;

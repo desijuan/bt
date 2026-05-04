@@ -8,6 +8,7 @@ const Torrent: type = @import("bp").Dto(TorrentInfo);
 const posix = std.posix;
 const linux = std.os.linux;
 const IoUring = linux.IoUring;
+const Ip4Address = std.Io.net.Ip4Address;
 
 const MAX_U32 = std.math.maxInt(u32);
 
@@ -52,7 +53,7 @@ const Ctx = struct {
     err: linux.E,
     event: Event,
     state: State,
-    peer: std.Io.net.Ip4Address,
+    peer: Ip4Address,
     piece: Piece,
     peer_bf: []const u8,
     recv_buf: []u8,
@@ -64,7 +65,7 @@ const Ctx = struct {
         err: linux.E,
         event: Event,
         state: State,
-        peer: std.Io.net.Ip4Address,
+        peer: Ip4Address,
         piece: Piece,
     };
 
@@ -131,7 +132,7 @@ pub fn startDownloading(
     defer gpa.free(pieces_buffers);
 
     const n_conns: u16 = for (0..N_CONNS) |i| {
-        const peer: std.Io.net.Ip4Address = peers.next() orelse {
+        const peer: Ip4Address = peers.next() orelse {
             std.debug.print(
                 "Total number of peers reached. Starting {d} connections.\n",
                 .{i},
@@ -217,7 +218,7 @@ pub fn startDownloading(
                             .{ ctx.fd, ctx.peer, @tagName(err) },
                         );
 
-                        const peer: std.Io.net.Ip4Address = peers.next() orelse {
+                        const peer: Ip4Address = peers.next() orelse {
                             ctx.event = .CLOSE;
                             ctx.state = .ShuttingDown;
                             _ = try ring.close(@intFromPtr(ctx), ctx.fd);
@@ -610,7 +611,7 @@ pub fn startDownloading(
                         break :close;
                     }
 
-                    const peer: std.Io.net.Ip4Address = peers.next() orelse {
+                    const peer: Ip4Address = peers.next() orelse {
                         ctx.state = .Off;
                         pending -= 1;
                         break :close;
