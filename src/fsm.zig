@@ -12,7 +12,7 @@ pub const BLOCK_SIZE = 16 * 1024;
 const MSG_BUF_SIZE = 512;
 const RECV_BUF_SIZE = BLOCK_SIZE + MSG_BUF_SIZE;
 
-const N_CONNS: u16 = 1;
+const N_CONNS = 1;
 
 pub const UIntStack = utils.Stack(u32);
 
@@ -75,7 +75,7 @@ pub fn startDownloading(
             break @intCast(i);
         };
 
-        clients[i].init(
+        clients[i] = Client.init(
             peer,
             recv_buffers[i * RECV_BUF_SIZE .. (i + 1) * RECV_BUF_SIZE],
             pieces_buffers[i * torrent.piece_length .. (i + 1) * torrent.piece_length],
@@ -97,7 +97,7 @@ pub fn startDownloading(
         while (ring.cq_ready() > 0) {
             const cqe: linux.io_uring_cqe = try ring.copy_cqe();
             const client: *Client = @ptrFromInt(cqe.user_data);
-            try client.advance(gpa, &ring, cqe.err(), cqe.res, &pending, info_hash, &peers, &pieces);
+            try client.handleEvent(gpa, &ring, cqe.err(), cqe.res, &pending, info_hash, &peers, &pieces);
         }
     }
 }

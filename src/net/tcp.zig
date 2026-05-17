@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Ip4Address = std.Io.net.Ip4Address;
 const posix = std.posix;
+const Allocator = std.mem.Allocator;
 
 pub fn toSockAddr(ip4Address: Ip4Address) posix.sockaddr.in {
     return std.posix.sockaddr.in{
@@ -51,7 +52,7 @@ pub const Handshake = struct {
         return 1 + self.pstr.len + self.reserved.len + self.info_hash.len + self.peer_id.len;
     }
 
-    pub fn serialize(self: Handshake, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+    pub fn serialize(self: Handshake, allocator: Allocator) error{OutOfMemory}![]const u8 {
         const str_len: usize = self.len();
         const str: []u8 = try allocator.alloc(u8, str_len);
 
@@ -105,7 +106,7 @@ pub const Msg = struct {
         @memcpy(bytes[5 .. 5 + self.payload.len], self.payload);
     }
 
-    pub fn serializeAlloc(self: Msg, allocator: std.mem.Allocator) error{OutOfMemory}![]const u8 {
+    pub fn serializeAlloc(self: Msg, allocator: Allocator) error{OutOfMemory}![]const u8 {
         const bytes_len: u32 = @intCast(self.len());
         const bytes: []u8 = try allocator.alloc(u8, bytes_len);
 
@@ -147,7 +148,7 @@ pub const Msg = struct {
         };
     }
 
-    pub inline fn decodeLengthPrefix(bytes: *const [4]u8) u32 {
+    pub fn decodeLengthPrefix(bytes: *const [4]u8) u32 {
         return std.mem.readInt(u32, bytes, .big);
     }
 
@@ -155,11 +156,12 @@ pub const Msg = struct {
         return self.id == other.id and std.mem.eql(u8, self.payload, other.payload);
     }
 
-    pub inline fn interested() Msg {
+    pub fn interested() Msg {
         return Msg{ .id = .Interested, .payload = &.{} };
     }
 
-    pub fn request(index: u32, begin: u32, length: u32, bytes: *[12]u8) Msg {
+    pub const REQUEST_BYTES_LEN = 12;
+    pub fn request(index: u32, begin: u32, length: u32, bytes: *[REQUEST_BYTES_LEN]u8) Msg {
         std.mem.writeInt(u32, bytes[0..4], index, .big);
         std.mem.writeInt(u32, bytes[4..8], begin, .big);
         std.mem.writeInt(u32, bytes[8..12], length, .big);

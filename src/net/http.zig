@@ -50,7 +50,7 @@ pub fn requestPeers(allocator: std.mem.Allocator, io: std.Io, url: Url) ![]const
     };
 
     const buffer: []u8 = try allocator.alloc(u8, content_length);
-    errdefer allocator.free(buffer);
+    defer allocator.free(buffer);
 
     const body = try response.reader(buffer).allocRemaining(allocator, .unlimited);
     errdefer allocator.free(body);
