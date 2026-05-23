@@ -3,6 +3,7 @@ const utils = @import("utils.zig");
 const tcp = @import("net/tcp.zig");
 const Client = @import("Client.zig");
 
+const log = std.log;
 const posix = std.posix;
 const linux = std.os.linux;
 const IoUring = linux.IoUring;
@@ -54,6 +55,7 @@ pub fn startDownloading(
     std.debug.print("handshake: {any}\n\n", .{handshake});
 
     var peers: tcp.PeersIterator = try tcp.PeersIterator.init(peers_bytes);
+    log.info("total peers: {d}.", .{peers.totalPeersCnt()});
 
     var clients: [N_CONNS]Client = undefined;
 
@@ -91,13 +93,16 @@ pub fn startDownloading(
     } else N_CONNS;
 
     var pending: i32 = n_conns;
+    var unchokes: u32 = 0;
     while (pending > 0) {
         _ = try ring.submit_and_wait(1);
 
         while (ring.cq_ready() > 0) {
             const cqe: linux.io_uring_cqe = try ring.copy_cqe();
             const client: *Client = @ptrFromInt(cqe.user_data);
-            try client.handleEvent(gpa, &ring, cqe.err(), cqe.res, &pending, info_hash, &peers, &pieces);
+            try client.handleEvent(gpa, &ring, cqe.err(), cqe.res, &pending, &unchokes, info_hash, &peers, &pieces);
         }
     }
+
+    log.info("Received {d} unchokes.", .{unchokes});
 }

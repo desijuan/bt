@@ -1,4 +1,7 @@
 const std = @import("std");
+
+const log = std.log;
+
 const utils = @import("utils.zig");
 
 const bp = @import("bp");
@@ -87,16 +90,16 @@ pub fn main(init: std.process.Init) !void {
 
     // Download from Peers
 
-    const torrentino = fsm.Torrent{
+    const torr = fsm.Torrent{
         .length = torrent_length,
         .piece_length = piece_length,
         .name = torrent.name,
         .pieces = torrent.pieces,
     };
 
-    try fsm.startDownloading(gpa, torrentino, &hash, trackerResponse.peers);
+    try fsm.startDownloading(gpa, torr, &hash, trackerResponse.peers);
 
-    std.debug.print("\nAll done!\n", .{});
+    log.info("All done!", .{});
 }
 
 comptime { // Tests

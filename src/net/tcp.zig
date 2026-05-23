@@ -15,28 +15,32 @@ pub fn toSockAddr(ip4Address: Ip4Address) posix.sockaddr.in {
 
 pub const PeersIterator = struct {
     peers: []const u8,
-    n: usize,
+    i: usize,
 
     pub fn init(peers: []const u8) error{MalformedPeersList}!PeersIterator {
         if (peers.len % 6 != 0) return error.MalformedPeersList;
 
         return PeersIterator{
             .peers = peers,
-            .n = 0,
+            .i = 0,
         };
     }
 
     pub fn next(self: *PeersIterator) ?Ip4Address {
-        const i = self.n * 6;
+        const i = self.i * 6;
 
         if (i >= self.peers.len) return null;
 
-        self.n += 1;
+        self.i += 1;
 
         return Ip4Address{
             .bytes = self.peers[i .. i + 4][0..4].*,
             .port = (@as(u16, self.peers[i + 4]) << 8) | @as(u16, self.peers[i + 5]),
         };
+    }
+
+    pub fn totalPeersCnt(self: PeersIterator) u32 {
+        return @intCast(self.peers.len / 6);
     }
 };
 
@@ -78,7 +82,7 @@ pub fn isAnsValid(ans: []const u8, info_hash: []const u8) bool {
 
 pub const MsgId = enum(u8) {
     Choke = 0,
-    Unchoke = 1,
+    UnChoke = 1,
     Interested = 2,
     NotInterested = 3,
     Have = 4,
@@ -130,8 +134,9 @@ pub const Msg = struct {
         const length_prefix: u32 = decodeLengthPrefix(bytes[0..4]);
 
         if (length_prefix < 0)
-            return error.InvalidLength
-        else if (length_prefix == 0)
+            return error.InvalidLength;
+
+        if (length_prefix == 0)
             return error.ReceivedKeepAliveMsg;
 
         if (bytes.len < 5) return error.InvalidBytes;

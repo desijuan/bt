@@ -3,6 +3,9 @@
 build:
 	zig build --summary all
 
+release:
+	zig build -Doptimize=ReleaseSmall --summary all
+
 run:
 	zig build run
 
@@ -12,4 +15,4 @@ test:
 clean:
 	rm -rf .zig-cache zig-out zig-pkg
 
-.PHONY: build run clean
+.PHONY: build release run clean
