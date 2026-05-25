@@ -24,6 +24,7 @@ const State = enum {
     Choked,
     Downloading,
     ClosingConnection,
+    ShuttingDown,
     Off,
 };
 
@@ -99,13 +100,13 @@ fn freeSendBuf(self: *Client, gpa: Allocator) void {
     self.send_buf = null;
 }
 
-pub fn init(peer_addr: Ip4Address, recv_buf: []u8, piece_buf: []u8) Client {
+pub fn init(recv_buf: []u8, piece_buf: []u8) Client {
     return Client{
         .fd = -1,
         .ka_cnt = 0,
-        .state = .Connecting,
-        .op = .socket,
-        .peer = Peer.init(peer_addr),
+        .state = .Off,
+        .op = .none,
+        .peer = null,
         .piece = null,
         .send_buf = null,
         .recv_buf = RecvBuf.init(recv_buf),
@@ -134,9 +135,10 @@ pub fn handleEvent(
         .Connecting => try self.hConnecting(gpa, ring, info_hash, peers, err, res),
         .Handshaking => if (try self.hHandshaking(gpa, ring, info_hash, err, res)) |next| continue :sw next,
         .ExpectingBitfieldMsg => if (try self.hExpectingBitfieldMsg(gpa, ring, err, res)) |next| continue :sw next,
-        .Choked => try self.hChoked(gpa, ring, pending, pieces, err, res),
+        .Choked => try self.hChoked(gpa, ring, pieces, err, res),
         .Downloading => try self.hDownloading(gpa, ring, unchokes, err, res),
-        .ClosingConnection => try self.hClosingConnection(gpa, ring, pending, peers, err),
+        .ClosingConnection => if (try self.hClosingConnection(gpa, ring, peers, err)) |next| continue :sw next,
+        .ShuttingDown => try self.hShuttingDown(gpa, pending, err),
         .Off => errorInvalidOp(self.state, self.op),
     };
 }
@@ -157,10 +159,25 @@ fn logErrorAndQueueCloseOp(self: *Client, ring: *IoUring, err: linux.E) error{Su
         "{f} @ fd {d}: {t} op returned error {t}. Closing connection.",
         .{ self.peer.?.addr, self.fd, self.op, err },
     );
-    try self.queueCloseOp(ring);
+    try self.queueCloseOp(ring, null);
 }
 
 // --- Queue Ops ---
+
+pub fn queueSocketOp(self: *Client, ring: *IoUring, peer_addr: Ip4Address) !void {
+    self.fd = -1;
+    self.ka_cnt = 0;
+    self.peer = Peer.init(peer_addr);
+    self.state = .Connecting;
+    self.op = .socket;
+    _ = try ring.socket(
+        @intFromPtr(self),
+        linux.AF.INET,
+        posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
+        posix.IPPROTO.TCP,
+        0,
+    );
+}
 
 fn queueConnectOp(self: *Client, ring: *IoUring, new_state: ?State) error{SubmissionQueueFull}!void {
     if (new_state) |state| self.state = state;
@@ -186,8 +203,8 @@ fn queueSendOp(self: *Client, ring: *IoUring, bytes: []const u8, new_state: ?Sta
     _ = try ring.send(@intFromPtr(self), self.fd, self.send_buf.?, 0);
 }
 
-fn queueCloseOp(self: *Client, ring: *IoUring) error{SubmissionQueueFull}!void {
-    self.state = .ClosingConnection;
+fn queueCloseOp(self: *Client, ring: *IoUring, new_state: ?State) error{SubmissionQueueFull}!void {
+    self.state = if (new_state) |state| state else .ClosingConnection;
     self.op = .close;
     _ = try ring.close(@intFromPtr(self), self.fd);
 }
@@ -241,7 +258,7 @@ fn hConnecting(
                 );
                 const peer_addr: Ip4Address = peers.next() orelse {
                     log.info("No more peers. Closing fd {d}.", .{self.fd});
-                    try self.queueCloseOp(ring);
+                    try self.queueCloseOp(ring, null);
                     return;
                 };
                 self.peer = Peer.init(peer_addr);
@@ -296,14 +313,14 @@ fn hHandshaking(
 
     const bytes: []const u8 = self.recv_buf.getRemainingBytes() orelse {
         log.info("Received zero bytes. Closing connection with {f} fd {d}.", .{ self.peer.?.addr, self.fd });
-        try self.queueCloseOp(ring);
+        try self.queueCloseOp(ring, null);
         return null;
     };
     std.debug.print("bytes:\n{any}\n", .{bytes});
 
     if (!tcp.isAnsValid(bytes, info_hash)) {
         log.info("Invalid handshake ans. Closing fd {d}.", .{self.fd});
-        try self.queueCloseOp(ring);
+        try self.queueCloseOp(ring, null);
         return null;
     }
     self.recv_buf.i += 68;
@@ -357,7 +374,7 @@ fn hExpectingBitfieldMsg(
 
     const bytes: []const u8 = self.recv_buf.getRemainingBytes() orelse {
         log.info("Received zero bytes. Closing connection with {f} fd {d}.", .{ self.peer.?.addr, self.fd });
-        try self.queueCloseOp(ring);
+        try self.queueCloseOp(ring, null);
         return null;
     };
     std.debug.print("bytes:\n{any}\n", .{bytes});
@@ -376,7 +393,7 @@ fn hExpectingBitfieldMsg(
 
         else => {
             log.err("Error: {t}. Closing the connection.", .{e});
-            try self.queueCloseOp(ring);
+            try self.queueCloseOp(ring, null);
             return null;
         },
     };
@@ -432,7 +449,7 @@ fn hExpectingBitfieldMsg(
 
         else => |msg_tag| {
             log.err("Don't know how to handle msg: {t}. Closing the connection.", .{msg_tag});
-            try self.queueCloseOp(ring);
+            try self.queueCloseOp(ring, null);
             return null;
         },
     }
@@ -442,7 +459,6 @@ fn hChoked(
     self: *Client,
     gpa: Allocator,
     ring: *IoUring,
-    pending: *i32,
     pieces: *UIntStack,
     err: linux.E,
     res: i32,
@@ -472,7 +488,7 @@ fn hChoked(
 
     const bytes: []const u8 = self.recv_buf.getRemainingBytes() orelse {
         log.info("Received zero bytes. Closing connection with {f} fd {d}.", .{ self.peer.?.addr, self.fd });
-        try self.queueCloseOp(ring);
+        try self.queueCloseOp(ring, null);
         return;
     };
     std.debug.print("bytes:\n{any}\n", .{bytes});
@@ -491,7 +507,7 @@ fn hChoked(
 
         else => {
             log.err("Error: {t}. Closing the connection.", .{e});
-            try self.queueCloseOp(ring);
+            try self.queueCloseOp(ring, null);
             return;
         },
     };
@@ -510,8 +526,9 @@ fn hChoked(
             //
             const piece_index: u32 = pieces.pop() orelse {
                 log.info("No more pieces. Closing connection.", .{});
-                pending.* -= 1;
-                try self.queueCloseOp(ring);
+                self.state = .ShuttingDown;
+                self.op = .close;
+                try self.queueCloseOp(ring, .ShuttingDown);
                 return;
             };
             self.piece = Piece{ .index = piece_index, .i = 0 };
@@ -530,7 +547,7 @@ fn hChoked(
 
         else => |msg_tag| {
             log.err("Don't know how to handle msg: {t}. Closing the connection.", .{msg_tag});
-            try self.queueCloseOp(ring);
+            try self.queueCloseOp(ring, null);
             return;
         },
     }
@@ -566,7 +583,7 @@ fn hDownloading(
 
     const bytes: []const u8 = self.recv_buf.getRemainingBytes() orelse {
         log.info("Received zero bytes. Closing connection with {f} fd {d}.", .{ self.peer.?.addr, self.fd });
-        try self.queueCloseOp(ring);
+        try self.queueCloseOp(ring, null);
         return;
     };
     log.info("Downloading. Received {d} bytes.", .{bytes.len});
@@ -574,7 +591,7 @@ fn hDownloading(
     unchokes.* += 1;
 
     log.info("CLOSING CONNECTION (for now).", .{});
-    try self.queueCloseOp(ring);
+    try self.queueCloseOp(ring, null);
     return;
 }
 
@@ -582,32 +599,24 @@ fn hClosingConnection(
     self: *Client,
     gpa: Allocator,
     ring: *IoUring,
-    pending: *i32,
     peers: *tcp.PeersIterator,
     err: linux.E,
-) !void {
+) !?State {
     switch (self.op) {
         .close => switch (err) {
             .SUCCESS => {
                 log.info("Successfully closed fd {d}.", .{self.fd});
                 self.peer.?.deinit(gpa);
+
                 const peer_addr: Ip4Address = peers.next() orelse {
-                    self.state = .Off;
-                    pending.* -= 1;
-                    return;
+                    log.info("No more peers. Switching off.", .{});
+                    self.state = .ShuttingDown;
+                    self.op = .none;
+                    return .ShuttingDown;
                 };
-                self.fd = -1;
-                self.ka_cnt = 0;
-                self.peer = Peer.init(peer_addr);
-                self.state = .Connecting;
-                self.op = .socket;
-                _ = try ring.socket(
-                    @intFromPtr(self),
-                    linux.AF.INET,
-                    posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
-                    posix.IPPROTO.TCP,
-                    0,
-                );
+
+                try self.queueSocketOp(ring, peer_addr);
+                return null;
             },
 
             else => {
@@ -618,4 +627,33 @@ fn hClosingConnection(
 
         else => return errorInvalidOp(self.state, self.op),
     }
+}
+
+fn hShuttingDown(
+    self: *Client,
+    gpa: Allocator,
+    pending: *i32,
+    err: linux.E,
+) !void {
+    switch (self.op) {
+        .close => switch (err) {
+            .SUCCESS => {
+                log.info("Successfully closed fd {d}.", .{self.fd});
+                self.peer.?.deinit(gpa);
+            },
+
+            else => {
+                log.info("Error {t} while closing fd {d}.", .{ err, self.fd });
+                return error.ErrorOnCloseFd;
+            },
+        },
+
+        .none => {},
+
+        else => return errorInvalidOp(self.state, self.op),
+    }
+
+    pending.* -= 1;
+    self.state = .Off;
+    return;
 }

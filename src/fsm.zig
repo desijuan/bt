@@ -57,40 +57,27 @@ pub fn startDownloading(
     var peers: tcp.PeersIterator = try tcp.PeersIterator.init(peers_bytes);
     log.info("total peers: {d}.", .{peers.totalPeersCnt()});
 
-    var clients: [N_CONNS]Client = undefined;
-
     const recv_buffers: []u8 = try gpa.alloc(u8, N_CONNS * RECV_BUF_SIZE);
-    defer {
-        gpa.free(recv_buffers);
-        for (&clients) |*client| client.deinit(gpa);
-    }
+    defer gpa.free(recv_buffers);
 
     const pieces_buffers: []u8 = try gpa.alloc(u8, N_CONNS * torrent.piece_length);
     defer gpa.free(pieces_buffers);
 
+    var clients: [N_CONNS]Client = undefined;
     const n_conns: u16 = for (0..N_CONNS) |i| {
         const peer: Ip4Address = peers.next() orelse {
-            std.debug.print(
-                "Total number of peers reached. Starting {d} connections.\n",
-                .{i},
-            );
+            log.info("Total number of peers reached. Starting {d} connections.", .{i});
             break @intCast(i);
         };
 
         clients[i] = Client.init(
-            peer,
             recv_buffers[i * RECV_BUF_SIZE .. (i + 1) * RECV_BUF_SIZE],
             pieces_buffers[i * torrent.piece_length .. (i + 1) * torrent.piece_length],
         );
 
-        _ = try ring.socket(
-            @intFromPtr(&clients[i]),
-            linux.AF.INET,
-            posix.SOCK.STREAM | posix.SOCK.NONBLOCK,
-            posix.IPPROTO.TCP,
-            0,
-        );
+        try clients[i].queueSocketOp(&ring, peer);
     } else N_CONNS;
+    defer for (clients[0..n_conns]) |*client| client.deinit(gpa);
 
     var pending: i32 = n_conns;
     var unchokes: u32 = 0;
