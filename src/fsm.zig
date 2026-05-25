@@ -71,6 +71,7 @@ pub fn startDownloading(
         };
 
         clients[i] = Client.init(
+            @intCast(i),
             recv_buffers[i * RECV_BUF_SIZE .. (i + 1) * RECV_BUF_SIZE],
             pieces_buffers[i * torrent.piece_length .. (i + 1) * torrent.piece_length],
         );

@@ -86,6 +86,7 @@ const RecvBuf = struct {
 const Client = @This();
 
 fd: i32,
+i: u16,
 ka_cnt: u16,
 state: State,
 op: Operation,
@@ -100,9 +101,10 @@ fn freeSendBuf(self: *Client, gpa: Allocator) void {
     self.send_buf = null;
 }
 
-pub fn init(recv_buf: []u8, piece_buf: []u8) Client {
+pub fn init(index: u16, recv_buf: []u8, piece_buf: []u8) Client {
     return Client{
         .fd = -1,
+        .i = index,
         .ka_cnt = 0,
         .state = .Off,
         .op = .none,
@@ -224,14 +226,17 @@ fn hConnecting(
         .socket => switch (err) {
             .SUCCESS => {
                 self.fd = res;
-                log.info("Succesfully created socket. Connecting to {f} @ fd {d}.", .{ self.peer.?.addr, self.fd });
+                log.info(
+                    "{d}: Succesfully created socket. Connecting to {f} @ fd {d}.",
+                    .{ self.i, self.peer.?.addr, self.fd },
+                );
                 try posix.setsockopt(self.fd, posix.IPPROTO.TCP, posix.TCP.USER_TIMEOUT, std.mem.asBytes(&TIMEOUT_MS));
                 try self.queueConnectOp(ring, null);
                 return;
             },
 
             else => {
-                log.err("Creation of socket failed with error {t}.", .{err});
+                log.err("{d}: Creation of socket failed with error {t}.", .{ self.i, err });
                 return error.SocketCreationFailed;
             },
         },
@@ -239,8 +244,8 @@ fn hConnecting(
         .connect => switch (err) {
             .SUCCESS => {
                 log.info(
-                    "Successfully connected to {f} @ fd {d}. Sending handshake.",
-                    .{ self.peer.?.addr, self.fd },
+                    "{d}: Successfully connected to {f} @ fd {d}. Sending handshake.",
+                    .{ self.i, self.peer.?.addr, self.fd },
                 );
                 const hs = tcp.Handshake{
                     .info_hash = info_hash,
@@ -253,8 +258,8 @@ fn hConnecting(
 
             .CONNREFUSED, .TIMEDOUT, .HOSTUNREACH => {
                 log.info(
-                    "Connection with {f} @ fd {d} returned {t}. Attempting another peer",
-                    .{ self.peer.?.addr, self.fd, err },
+                    "{d}: Connection with {f} @ fd {d} returned {t}. Attempting another peer",
+                    .{ self.i, self.peer.?.addr, self.fd, err },
                 );
                 const peer_addr: Ip4Address = peers.next() orelse {
                     log.info("No more peers. Closing fd {d}.", .{self.fd});
@@ -263,8 +268,8 @@ fn hConnecting(
                 };
                 self.peer = Peer.init(peer_addr);
                 log.info(
-                    "Attempting peer: {f} @ fd {d}.",
-                    .{ self.peer.?.addr, self.fd },
+                    "{d}: Attempting peer: {f} @ fd {d}.",
+                    .{ self.i, self.peer.?.addr, self.fd },
                 );
                 try self.queueConnectOp(ring, null);
                 return;
@@ -312,25 +317,28 @@ fn hHandshaking(
     }
 
     const bytes: []const u8 = self.recv_buf.getRemainingBytes() orelse {
-        log.info("Received zero bytes. Closing connection with {f} fd {d}.", .{ self.peer.?.addr, self.fd });
+        log.info(
+            "{d}: Received zero bytes. Closing connection with {f} fd {d}.",
+            .{ self.i, self.peer.?.addr, self.fd },
+        );
         try self.queueCloseOp(ring, null);
         return null;
     };
     std.debug.print("bytes:\n{any}\n", .{bytes});
 
     if (!tcp.isAnsValid(bytes, info_hash)) {
-        log.info("Invalid handshake ans. Closing fd {d}.", .{self.fd});
+        log.info("{d}: Invalid handshake ans. Closing fd {d}.", .{ self.i, self.fd });
         try self.queueCloseOp(ring, null);
         return null;
     }
     self.recv_buf.i += 68;
-    log.info("Received valid handshake ans from {f} @ fd {d}.", .{ self.peer.?.addr, self.fd });
+    log.info("{d}: Received valid handshake ans from {f} @ fd {d}.", .{ self.i, self.peer.?.addr, self.fd });
 
     if (bytes.len == 68) { // We received only the hanshake ans
         const msg_interested: []const u8 = try tcp.Msg.interested().serializeAlloc(gpa);
         log.info(
-            "No more bytes left. Asking for more. Sending interested msg to {f} @ fd {d}: {any}.",
-            .{ self.peer.?.addr, self.fd, msg_interested },
+            "{d}: No more bytes left. Asking for more. Sending interested msg to {f} @ fd {d}: {any}.",
+            .{ self.i, self.peer.?.addr, self.fd, msg_interested },
         );
         try self.queueSendOp(ring, msg_interested, .ExpectingBitfieldMsg);
         return null;
@@ -373,7 +381,10 @@ fn hExpectingBitfieldMsg(
     }
 
     const bytes: []const u8 = self.recv_buf.getRemainingBytes() orelse {
-        log.info("Received zero bytes. Closing connection with {f} fd {d}.", .{ self.peer.?.addr, self.fd });
+        log.info(
+            "{d}: Received zero bytes. Closing connection with {f} fd {d}.",
+            .{ self.i, self.peer.?.addr, self.fd },
+        );
         try self.queueCloseOp(ring, null);
         return null;
     };
@@ -382,17 +393,17 @@ fn hExpectingBitfieldMsg(
     const msg = tcp.Msg.decode(bytes) catch |e| switch (e) {
         error.ReceivedKeepAliveMsg => {
             log.info(
-                "Received keep-alive msg from {f} @ fd {d}. Waiting for more bytes.",
-                .{ self.peer.?.addr, self.fd },
+                "{d}: Received keep-alive msg from {f} @ fd {d}. Waiting for more bytes.",
+                .{ self.i, self.peer.?.addr, self.fd },
             );
             self.ka_cnt += 1;
-            log.info("keep-alive cnt: {d}.", .{self.ka_cnt});
+            log.info("{d}: keep-alive cnt: {d}.", .{ self.i, self.ka_cnt });
             try self.queueRecvOp(ring, null);
             return null;
         },
 
         else => {
-            log.err("Error: {t}. Closing the connection.", .{e});
+            log.err("{d}: Error: {t}. Closing the connection.", .{ self.i, e });
             try self.queueCloseOp(ring, null);
             return null;
         },
@@ -404,15 +415,15 @@ fn hExpectingBitfieldMsg(
     switch (msg.id) {
         .UnChoke => {
             log.info(
-                "Received unchoke msg from {f} @ fd {d}.",
-                .{ self.peer.?.addr, self.fd },
+                "{d}: Received unchoke msg from {f} @ fd {d}.",
+                .{ self.i, self.peer.?.addr, self.fd },
             );
             // Many clients send an unchoke right after the bitfield msg,
             // we respond with interested and transition to Choked,
             const msg_interested: []const u8 = try tcp.Msg.interested().serializeAlloc(gpa);
             std.debug.print(
-                "Sending interested msg to {f} @ fd {d}: {any}.\n",
-                .{ self.peer.?.addr, self.fd, msg_interested },
+                "{d}: Sending interested msg to {f} @ fd {d}: {any}.\n",
+                .{ self.i, self.peer.?.addr, self.fd, msg_interested },
             );
             try self.queueSendOp(ring, msg_interested, .Choked);
             return null;
@@ -420,8 +431,8 @@ fn hExpectingBitfieldMsg(
 
         .Bitfield => {
             log.info(
-                "Received bitfield msg from {f} @ fd {d}.",
-                .{ self.peer.?.addr, self.fd },
+                "{d}: Received bitfield msg from {f} @ fd {d}.",
+                .{ self.i, self.peer.?.addr, self.fd },
             );
 
             // Copy peers bitfield
@@ -440,15 +451,15 @@ fn hExpectingBitfieldMsg(
             // Send interested msg
             const msg_interested: []const u8 = try tcp.Msg.interested().serializeAlloc(gpa);
             log.info(
-                "Sending interested msg to {f} @ fd {d}: {any}.",
-                .{ self.peer.?.addr, self.fd, msg_interested },
+                "{d}: Sending interested msg to {f} @ fd {d}: {any}.",
+                .{ self.i, self.peer.?.addr, self.fd, msg_interested },
             );
             try self.queueSendOp(ring, msg_interested, .Choked);
             return null;
         },
 
         else => |msg_tag| {
-            log.err("Don't know how to handle msg: {t}. Closing the connection.", .{msg_tag});
+            log.err("{d}: Don't know how to handle msg: {t}. Closing the connection.", .{ self.i, msg_tag });
             try self.queueCloseOp(ring, null);
             return null;
         },
@@ -487,7 +498,10 @@ fn hChoked(
     }
 
     const bytes: []const u8 = self.recv_buf.getRemainingBytes() orelse {
-        log.info("Received zero bytes. Closing connection with {f} fd {d}.", .{ self.peer.?.addr, self.fd });
+        log.info(
+            "{d}: Received zero bytes. Closing connection with {f} fd {d}.",
+            .{ self.i, self.peer.?.addr, self.fd },
+        );
         try self.queueCloseOp(ring, null);
         return;
     };
@@ -496,17 +510,17 @@ fn hChoked(
     const msg = tcp.Msg.decode(bytes) catch |e| switch (e) {
         error.ReceivedKeepAliveMsg => {
             log.info(
-                "Received keep-alive msg from {f} @ fd {d}. Waiting for more bytes.",
-                .{ self.peer.?.addr, self.fd },
+                "{d}: Received keep-alive msg from {f} @ fd {d}. Waiting for more bytes.",
+                .{ self.i, self.peer.?.addr, self.fd },
             );
             self.ka_cnt += 1;
-            log.info("keep-alive cnt: {d}.", .{self.ka_cnt});
+            log.info("{d}: keep-alive cnt: {d}.", .{ self.i, self.ka_cnt });
             try self.queueRecvOp(ring, null);
             return;
         },
 
         else => {
-            log.err("Error: {t}. Closing the connection.", .{e});
+            log.err("{d}: Error: {t}. Closing the connection.", .{ self.i, e });
             try self.queueCloseOp(ring, null);
             return;
         },
@@ -518,14 +532,14 @@ fn hChoked(
     switch (msg.id) {
         .UnChoke => {
             log.info(
-                "Received unchoke msg from {f} @ fd {d}.",
-                .{ self.peer.?.addr, self.fd },
+                "{d}: Received unchoke msg from {f} @ fd {d}.",
+                .{ self.i, self.peer.?.addr, self.fd },
             );
             //
             // Pop a piece from the stack
             //
             const piece_index: u32 = pieces.pop() orelse {
-                log.info("No more pieces. Closing connection.", .{});
+                log.info("{d}: No more pieces. Closing connection.", .{self.i});
                 self.state = .ShuttingDown;
                 self.op = .close;
                 try self.queueCloseOp(ring, .ShuttingDown);
@@ -538,15 +552,15 @@ fn hChoked(
             var payload: [tcp.Msg.REQUEST_BYTES_LEN]u8 = undefined;
             const msg_req: []const u8 = try tcp.Msg.request(piece_index, 0, BLOCK_SIZE, &payload).serializeAlloc(gpa);
             log.info(
-                "Sending request msg to {f} @ fd {d}: {any}.",
-                .{ self.peer.?.addr, self.fd, msg_req },
+                "{d}: Sending request msg to {f} @ fd {d}.",
+                .{ self.i, self.peer.?.addr, self.fd },
             );
             try self.queueSendOp(ring, msg_req, .Downloading);
             return;
         },
 
         else => |msg_tag| {
-            log.err("Don't know how to handle msg: {t}. Closing the connection.", .{msg_tag});
+            log.err("{d}: Don't know how to handle msg: {t}. Closing the connection.", .{ self.i, msg_tag });
             try self.queueCloseOp(ring, null);
             return;
         },
@@ -582,15 +596,18 @@ fn hDownloading(
     }
 
     const bytes: []const u8 = self.recv_buf.getRemainingBytes() orelse {
-        log.info("Received zero bytes. Closing connection with {f} fd {d}.", .{ self.peer.?.addr, self.fd });
+        log.info(
+            "{d}: Received zero bytes. Closing connection with {f} fd {d}.",
+            .{ self.i, self.peer.?.addr, self.fd },
+        );
         try self.queueCloseOp(ring, null);
         return;
     };
-    log.info("Downloading. Received {d} bytes.", .{bytes.len});
+    log.info("{d}: Downloading. Received {d} bytes.", .{ self.i, bytes.len });
 
     unchokes.* += 1;
 
-    log.info("CLOSING CONNECTION (for now).", .{});
+    log.info("{d}: CLOSING CONNECTION (for now).", .{self.i});
     try self.queueCloseOp(ring, null);
     return;
 }
@@ -605,11 +622,11 @@ fn hClosingConnection(
     switch (self.op) {
         .close => switch (err) {
             .SUCCESS => {
-                log.info("Successfully closed fd {d}.", .{self.fd});
+                log.info("{d}: Successfully closed fd {d}.", .{ self.i, self.fd });
                 self.peer.?.deinit(gpa);
 
                 const peer_addr: Ip4Address = peers.next() orelse {
-                    log.info("No more peers. Switching off.", .{});
+                    log.info("{d}: No more peers. Switching off client.", .{self.i});
                     self.state = .ShuttingDown;
                     self.op = .none;
                     return .ShuttingDown;
@@ -620,7 +637,7 @@ fn hClosingConnection(
             },
 
             else => {
-                log.info("Error {t} while closing fd {d}.", .{ err, self.fd });
+                log.info("{d}: Error {t} while closing fd {d}.", .{ self.i, err, self.fd });
                 return error.ErrorOnCloseFd;
             },
         },
@@ -638,12 +655,12 @@ fn hShuttingDown(
     switch (self.op) {
         .close => switch (err) {
             .SUCCESS => {
-                log.info("Successfully closed fd {d}.", .{self.fd});
+                log.info("{d}: Successfully closed fd {d}.", .{ self.i, self.fd });
                 self.peer.?.deinit(gpa);
             },
 
             else => {
-                log.info("Error {t} while closing fd {d}.", .{ err, self.fd });
+                log.info("{d}: Error {t} while closing fd {d}.", .{ self.i, err, self.fd });
                 return error.ErrorOnCloseFd;
             },
         },
@@ -653,6 +670,7 @@ fn hShuttingDown(
         else => return errorInvalidOp(self.state, self.op),
     }
 
+    log.info("{d}: Good bye!", .{self.i});
     pending.* -= 1;
     self.state = .Off;
     return;
