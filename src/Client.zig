@@ -13,10 +13,6 @@ const linux = std.os.linux;
 const IoUring = linux.IoUring;
 const Ip4Address = std.Io.net.Ip4Address;
 
-// TODO: Set this in a global config?
-const TIMEOUT_MS: c_int = 2000;
-const MAX_KEEPALIVES = 8;
-
 const State = enum {
     Connecting,
     Handshaking,
@@ -127,6 +123,7 @@ pub fn handleEvent(
     ring: *IoUring,
     err: linux.E,
     res: i32,
+    timeout_ms: c_int,
     pending: *i32,
     unchokes: *u32,
     info_hash: *const [20]u8,
@@ -134,7 +131,7 @@ pub fn handleEvent(
     pieces: *UIntStack,
 ) !void {
     return sw: switch (self.state) {
-        .Connecting => try self.hConnecting(gpa, ring, info_hash, peers, err, res),
+        .Connecting => try self.hConnecting(gpa, ring, timeout_ms, info_hash, peers, err, res),
         .Handshaking => if (try self.hHandshaking(gpa, ring, info_hash, err, res)) |next| continue :sw next,
         .ExpectingBitfieldMsg => if (try self.hExpectingBitfieldMsg(gpa, ring, err, res)) |next| continue :sw next,
         .Choked => try self.hChoked(gpa, ring, pieces, err, res),
@@ -217,6 +214,7 @@ fn hConnecting(
     self: *Client,
     gpa: Allocator,
     ring: *IoUring,
+    timeout_ms: c_int,
     info_hash: *const [20]u8,
     peers: *tcp.PeersIterator,
     err: linux.E,
@@ -230,7 +228,7 @@ fn hConnecting(
                     "{d}: Succesfully created socket. Connecting to {f} @ fd {d}.",
                     .{ self.i, self.peer.?.addr, self.fd },
                 );
-                try posix.setsockopt(self.fd, posix.IPPROTO.TCP, posix.TCP.USER_TIMEOUT, std.mem.asBytes(&TIMEOUT_MS));
+                try posix.setsockopt(self.fd, posix.IPPROTO.TCP, posix.TCP.USER_TIMEOUT, std.mem.asBytes(&timeout_ms));
                 try self.queueConnectOp(ring, null);
                 return;
             },

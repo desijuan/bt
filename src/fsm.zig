@@ -2,6 +2,7 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const tcp = @import("net/tcp.zig");
 const Client = @import("Client.zig");
+const Config = @import("Config.zig");
 
 const log = std.log;
 const posix = std.posix;
@@ -12,8 +13,6 @@ const Ip4Address = std.Io.net.Ip4Address;
 pub const BLOCK_SIZE = 16 * 1024;
 const MSG_BUF_SIZE = 512;
 const RECV_BUF_SIZE = BLOCK_SIZE + MSG_BUF_SIZE;
-
-const N_CONNS = 1;
 
 pub const UIntStack = utils.Stack(u32);
 
@@ -26,10 +25,12 @@ pub const Torrent = struct {
 
 pub fn startDownloading(
     gpa: std.mem.Allocator,
+    config: Config,
     torrent: Torrent,
     info_hash: *const [20]u8,
     peers_bytes: []const u8,
 ) !void {
+    const n_clients: usize = config.n_clients;
     const n_pieces: usize = torrent.length / torrent.piece_length;
 
     const stack_items: []u32 = try gpa.alloc(u32, n_pieces);
@@ -39,7 +40,7 @@ pub fn startDownloading(
 
     for (0..n_pieces) |i| try pieces.push(@intCast(n_pieces - i));
 
-    const entries: u16 = try std.math.ceilPowerOfTwo(u16, 4 * N_CONNS);
+    const entries: u16 = try std.math.ceilPowerOfTwo(u16, 4 * @as(u16, @intCast(n_clients)));
 
     var ring: IoUring = try IoUring.init(entries, 0);
     defer ring.deinit();
@@ -57,14 +58,14 @@ pub fn startDownloading(
     var peers: tcp.PeersIterator = try tcp.PeersIterator.init(peers_bytes);
     log.info("total peers: {d}.", .{peers.totalPeersCnt()});
 
-    const recv_buffers: []u8 = try gpa.alloc(u8, N_CONNS * RECV_BUF_SIZE);
+    const recv_buffers: []u8 = try gpa.alloc(u8, n_clients * RECV_BUF_SIZE);
     defer gpa.free(recv_buffers);
 
-    const pieces_buffers: []u8 = try gpa.alloc(u8, N_CONNS * torrent.piece_length);
+    const pieces_buffers: []u8 = try gpa.alloc(u8, n_clients * torrent.piece_length);
     defer gpa.free(pieces_buffers);
 
-    var clients: [N_CONNS]Client = undefined;
-    const n_conns: u16 = for (0..N_CONNS) |i| {
+    const clients: []Client = try gpa.alloc(Client, n_clients);
+    const n_conns: u16 = for (0..n_clients) |i| {
         const peer: Ip4Address = peers.next() orelse {
             log.info("Total number of peers reached. Starting {d} connections.", .{i});
             break @intCast(i);
@@ -77,8 +78,11 @@ pub fn startDownloading(
         );
 
         try clients[i].queueSocketOp(&ring, peer);
-    } else N_CONNS;
-    defer for (clients[0..n_conns]) |*client| client.deinit(gpa);
+    } else @intCast(n_clients);
+    defer {
+        for (clients[0..n_conns]) |*client| client.deinit(gpa);
+        gpa.free(clients);
+    }
 
     var pending: i32 = n_conns;
     var unchokes: u32 = 0;
@@ -88,7 +92,7 @@ pub fn startDownloading(
         while (ring.cq_ready() > 0) {
             const cqe: linux.io_uring_cqe = try ring.copy_cqe();
             const client: *Client = @ptrFromInt(cqe.user_data);
-            try client.handleEvent(gpa, &ring, cqe.err(), cqe.res, &pending, &unchokes, info_hash, &peers, &pieces);
+            try client.handleEvent(gpa, &ring, cqe.err(), cqe.res, config.timeout_ms, &pending, &unchokes, info_hash, &peers, &pieces);
         }
     }
 

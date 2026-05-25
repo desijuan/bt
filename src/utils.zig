@@ -1,4 +1,6 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const Io = std.Io;
 const testing = std.testing;
 
 pub inline fn range(comptime start: comptime_int, comptime end: comptime_int) [end - start]u8 {
@@ -22,6 +24,28 @@ test range {
     try testing.expectEqual(10, v.len);
     try testing.expectEqual(11, v[0]);
     try testing.expectEqual(20, v[9]);
+}
+
+pub const ReadFileZError = std.Io.File.OpenError || std.Io.File.LengthError ||
+    std.Io.Reader.Error || error{OutOfMemory};
+
+pub fn readFileZ(allocator: Allocator, io: Io, path: []const u8) ReadFileZError![:0]const u8 {
+    const file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_only });
+    defer file.close(io);
+
+    var buf: [4 * 1024]u8 = undefined;
+    var reader: std.Io.File.Reader = file.reader(io, &buf);
+
+    const size: u64 = try file.length(io);
+
+    const bytes: []u8 = try allocator.alloc(u8, size + 1);
+    errdefer allocator.free(bytes);
+
+    try reader.interface.readSliceAll(bytes[0..size]);
+
+    bytes[size] = 0;
+
+    return bytes[0..size :0];
 }
 
 pub fn Stack(comptime T: type) type {

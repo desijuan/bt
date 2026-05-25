@@ -1,11 +1,9 @@
 const std = @import("std");
-
 const log = std.log;
 
+const Config = @import("Config.zig");
 const utils = @import("utils.zig");
-
 const bp = @import("bp");
-
 const http = @import("net/http.zig");
 const fsm = @import("fsm.zig");
 
@@ -19,13 +17,20 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
 
-    const file_buffer: []const u8 = try std.Io.Dir.readFileAlloc(
-        std.Io.Dir.cwd(),
-        io,
-        "debian-12.9.0-amd64-netinst.iso.torrent",
-        gpa,
-        std.Io.Limit.unlimited,
-    );
+    const config: Config = blk: {
+        const config_buffer: [:0]const u8 = utils.readFileZ(gpa, io, "config.zon") catch |err| switch (err) {
+            error.FileNotFound => break :blk Config{},
+            else => return err,
+        };
+        defer gpa.free(config_buffer);
+
+        break :blk try std.zon.parse.fromSlice(Config, gpa, config_buffer, null, .{
+            .ignore_unknown_fields = true,
+            .free_on_error = false,
+        });
+    };
+
+    const file_buffer: [:0]const u8 = try utils.readFileZ(gpa, io, "debian-12.9.0-amd64-netinst.iso.torrent");
     defer gpa.free(file_buffer);
 
     // Parse Torrent File
@@ -97,7 +102,7 @@ pub fn main(init: std.process.Init) !void {
         .pieces = torrent.pieces,
     };
 
-    try fsm.startDownloading(gpa, torr, &hash, trackerResponse.peers);
+    try fsm.startDownloading(gpa, config, torr, &hash, trackerResponse.peers);
 
     log.info("All done!", .{});
 }
