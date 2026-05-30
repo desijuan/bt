@@ -160,22 +160,21 @@ The implementation assumes a somewhat modern Linux kernel supporting io_uring.
 
 ## Performance characteristics
 
-On a 2025 AMD Ryzen 7 laptop with 24 GB RAM, running on Linux with the following in the
-`./config.zon` file:
+On a 2025 AMD Ryzen 7 laptop with 24 GB RAM, running with `n_clients` set to 48:
 
 ```zig
 .{
-    .n_clients = 8,
+    .n_clients = 48,
 }
 ```
 
-bt contacted 43 peers, achieving 9 successful unchokes in concurrent peer communication lasting
-~9.6 seconds while using very few resources:
+After aproximately 2 minutes, bt contacted 50 peers, achieving 17 successful unchokes using very few
+resources:
 
 ```
-real    0m9.608s
-user    0m0.003s
-sys     0m0.021s
+real	2m2.360s
+user	0m0.008s
+sys     0m0.019s
 ```
 
 The extremely low CPU time is one of the primary goals of the project:
