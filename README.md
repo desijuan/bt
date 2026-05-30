@@ -122,7 +122,7 @@ Other configurable parameters include:
 The default values are defined in the file `src/Config.zon`:
 
 ```zig
-n_clients: u16 = 1,
+n_clients: u16 = 8,
 max_keepalives: u16 = 8,
 timeout_ms: c_int = 2000,
 ```

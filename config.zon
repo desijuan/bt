@@ -1,5 +1,3 @@
 .{
     .n_clients = 1,
-    .max_keepalives = 8,
-    .timeout_ms = 2000,
 }
