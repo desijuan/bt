@@ -1,4 +1,7 @@
-<a href="https://asciinema.org/a/pPjSg1Dmwl7T1dPT"><img src="https://asciinema.org/a/pPjSg1Dmwl7T1dPT.svg" alt="bt demo" width="100%"/></a>
+<a href="https://asciinema.org/a/vjg3600O9lbXChDh" target="_blank">
+    <img src="https://asciinema.org/a/vjg3600O9lbXChDh.svg" alt="bt demo" width="100%"/>
+</a>
+
 
 # bt
 
