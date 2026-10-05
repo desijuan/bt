@@ -3,8 +3,10 @@ const tcp = @import("net/tcp.zig");
 const fsm = @import("fsm.zig");
 const utils = @import("utils.zig");
 
+const PieceScheduler = @import("piece_scheduler/PieceScheduler.zig");
+
 const UIntStack = fsm.UIntStack;
-const BLOCK_SIZE = fsm.BLOCK_SIZE;
+const SIZE_BLOCK = fsm.SIZE_BLOCK;
 
 const Allocator = std.mem.Allocator;
 const log = std.log;
@@ -128,13 +130,13 @@ pub fn handleEvent(
     unchokes: *u32,
     info_hash: *const [20]u8,
     peers: *tcp.PeersIterator,
-    pieces: *UIntStack,
+    ps: *PieceScheduler,
 ) !void {
     return sw: switch (self.state) {
         .Connecting => try self.hConnecting(gpa, ring, timeout_ms, info_hash, peers, err, res),
         .Handshaking => if (try self.hHandshaking(gpa, ring, info_hash, err, res)) |next| continue :sw next,
         .ExpectingBitfieldMsg => if (try self.hExpectingBitfieldMsg(gpa, ring, err, res)) |next| continue :sw next,
-        .Choked => try self.hChoked(gpa, ring, pieces, err, res),
+        .Choked => try self.hChoked(gpa, ring, ps, err, res),
         .Downloading => try self.hDownloading(gpa, ring, unchokes, err, res),
         .ClosingConnection => if (try self.hClosingConnection(gpa, ring, peers, err)) |next| continue :sw next,
         .ShuttingDown => try self.hShuttingDown(gpa, pending, err),
@@ -468,7 +470,7 @@ fn hChoked(
     self: *Client,
     gpa: Allocator,
     ring: *IoUring,
-    pieces: *UIntStack,
+    ps: *PieceScheduler,
     err: linux.E,
     res: i32,
 ) !void {
@@ -534,9 +536,9 @@ fn hChoked(
                 .{ self.i, self.peer.?.addr, self.fd },
             );
             //
-            // Pop a piece from the stack
+            // Claim a piece
             //
-            const piece_index: u32 = pieces.pop() orelse {
+            const piece_index: u32 = try ps.claimPiece(self.i, self.peer.?.addr) orelse {
                 log.info("{d}: No more pieces. Closing connection.", .{self.i});
                 self.state = .ShuttingDown;
                 self.op = .close;
@@ -548,7 +550,7 @@ fn hChoked(
             // And request it
             //
             var payload: [tcp.Msg.REQUEST_BYTES_LEN]u8 = undefined;
-            const msg_req: []const u8 = try tcp.Msg.request(piece_index, 0, BLOCK_SIZE, &payload).serializeAlloc(gpa);
+            const msg_req: []const u8 = try tcp.Msg.request(piece_index, 0, SIZE_BLOCK, &payload).serializeAlloc(gpa);
             log.info(
                 "{d}: Sending request msg to {f} @ fd {d}.",
                 .{ self.i, self.peer.?.addr, self.fd },

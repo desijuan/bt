@@ -1,8 +1,10 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const Torrent = @import("Torrent.zig");
 const tcp = @import("net/tcp.zig");
 const Client = @import("Client.zig");
 const Config = @import("Config.zig");
+const PieceScheduler = @import("piece_scheduler/PieceScheduler.zig");
 
 const log = std.log;
 const posix = std.posix;
@@ -10,18 +12,11 @@ const linux = std.os.linux;
 const IoUring = linux.IoUring;
 const Ip4Address = std.Io.net.Ip4Address;
 
-pub const BLOCK_SIZE = 16 * 1024;
-const MSG_BUF_SIZE = 512;
-const RECV_BUF_SIZE = BLOCK_SIZE + MSG_BUF_SIZE;
+pub const SIZE_BLOCK = 16 * 1024;
+const SIZE_MSG_BUF = 512;
+const SIZE_RECV_BUF = SIZE_BLOCK + SIZE_MSG_BUF;
 
-pub const UIntStack = utils.Stack(u32);
-
-pub const Torrent = struct {
-    length: u32,
-    piece_length: u32,
-    name: []const u8,
-    pieces: []const u8,
-};
+var pieceScheduler: PieceScheduler = undefined;
 
 pub fn startDownloading(
     gpa: std.mem.Allocator,
@@ -31,14 +26,9 @@ pub fn startDownloading(
     peers_bytes: []const u8,
 ) !void {
     const n_clients: usize = config.n_clients;
-    const n_pieces: usize = torrent.length / torrent.piece_length;
 
-    const stack_items: []u32 = try gpa.alloc(u32, n_pieces);
-    defer gpa.free(stack_items);
-
-    var pieces: UIntStack = UIntStack.init(stack_items);
-
-    for (0..n_pieces) |i| try pieces.push(@intCast(n_pieces - i));
+    pieceScheduler = try PieceScheduler.new(torrent.pieceCnt());
+    defer pieceScheduler.deinit();
 
     const entries: u16 = try std.math.ceilPowerOfTwo(u16, 4 * @as(u16, @intCast(n_clients)));
 
@@ -58,7 +48,7 @@ pub fn startDownloading(
     var peers: tcp.PeersIterator = try tcp.PeersIterator.init(peers_bytes);
     log.info("total peers: {d}.", .{peers.totalPeersCnt()});
 
-    const recv_buffers: []u8 = try gpa.alloc(u8, n_clients * RECV_BUF_SIZE);
+    const recv_buffers: []u8 = try gpa.alloc(u8, n_clients * SIZE_RECV_BUF);
     defer gpa.free(recv_buffers);
 
     const pieces_buffers: []u8 = try gpa.alloc(u8, n_clients * torrent.piece_length);
@@ -73,7 +63,7 @@ pub fn startDownloading(
 
         clients[i] = Client.init(
             @intCast(i),
-            recv_buffers[i * RECV_BUF_SIZE .. (i + 1) * RECV_BUF_SIZE],
+            recv_buffers[i * SIZE_RECV_BUF .. (i + 1) * SIZE_RECV_BUF],
             pieces_buffers[i * torrent.piece_length .. (i + 1) * torrent.piece_length],
         );
 
@@ -92,7 +82,7 @@ pub fn startDownloading(
         while (ring.cq_ready() > 0) {
             const cqe: linux.io_uring_cqe = try ring.copy_cqe();
             const client: *Client = @ptrFromInt(cqe.user_data);
-            try client.handleEvent(gpa, &ring, cqe.err(), cqe.res, config.timeout_ms, &pending, &unchokes, info_hash, &peers, &pieces);
+            try client.handleEvent(gpa, &ring, cqe.err(), cqe.res, config.timeout_ms, &pending, &unchokes, info_hash, &peers, &pieceScheduler);
         }
     }
 

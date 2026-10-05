@@ -1,7 +1,7 @@
 const std = @import("std");
 const bp = @import("bp");
 
-pub const TorrentFileInfo = struct {
+pub const TorrentFileSchema = struct {
     @"creation date": bp.Int,
     announce: bp.String,
     comment: bp.String,
@@ -10,19 +10,19 @@ pub const TorrentFileInfo = struct {
     @"url-list": bp.List,
 };
 
-pub const TorrentInfo = struct {
+pub const TorrentSchema = struct {
     length: bp.Int,
     @"piece length": bp.Int,
     name: bp.String,
     pieces: bp.String,
 };
 
-pub const TrackerResponseInfo = struct {
+pub const TrackerResponseSchema = struct {
     interval: bp.Int,
     peers: bp.String,
 };
 
-const TorrentFile: type = bp.Dto(TorrentFileInfo);
+pub const TorrentFile: type = bp.Dto(TorrentFileSchema);
 pub fn printTorrentFile(torrentFile: TorrentFile) !void {
     inline for (@typeInfo(TorrentFile).@"struct".fields) |field| switch (@typeInfo(field.type)) {
         .pointer => if (comptime std.mem.eql(u8, "info", field.name))
@@ -36,7 +36,7 @@ pub fn printTorrentFile(torrentFile: TorrentFile) !void {
     };
 }
 
-const Torrent: type = bp.Dto(TorrentInfo);
+pub const Torrent: type = bp.Dto(TorrentSchema);
 pub fn printTorrent(torrent: Torrent) void {
     inline for (@typeInfo(Torrent).@"struct".fields) |field| switch (@typeInfo(field.type)) {
         .pointer => if (comptime std.mem.eql(u8, "pieces", field.name))
@@ -48,7 +48,7 @@ pub fn printTorrent(torrent: Torrent) void {
     };
 }
 
-const TrackerResponse: type = bp.Dto(TrackerResponseInfo);
+pub const TrackerResponse: type = bp.Dto(TrackerResponseSchema);
 pub fn printTrackerResponse(self: TrackerResponse) void {
     inline for (@typeInfo(TrackerResponse).@"struct".fields) |field| switch (@typeInfo(field.type)) {
         .pointer => std.debug.print("{s}: {x} [..]\n", .{ field.name, @field(self, field.name)[0..20] }),
